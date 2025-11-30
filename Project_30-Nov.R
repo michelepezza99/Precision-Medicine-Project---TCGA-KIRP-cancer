@@ -399,8 +399,8 @@ deg.table <- data.frame(
 
 ## Apply NEW thresholds -------------------------------------------------
 
-FDR_threshold <- 0.001
-FC_threshold  <- 1.7
+FDR_threshold <- 0.05
+FC_threshold  <- 1.2
 
 deg.genes <- subset(
   deg.table,
@@ -431,33 +431,9 @@ length(DEG_list)
 
 #########################################################################
 
-# CoExpression Networks
+# CoExpression Networks (Binary with Statistical Testing))
 
 ########################################################################
-
-## Extract the DEG expression matrices -----------------------------------
-
-# Keep only DEGs in the normalized matrices
-expr_deg_cancer <- filtr.expr.c[DEG_list, ]
-expr_deg_normal <- filtr.expr.n[DEG_list, ]
-
-# Log transform (as asked by the professor)
-expr_deg_cancer <- log2(expr_deg_cancer + 1)
-expr_deg_normal <- log2(expr_deg_normal + 1)
-
-# Check dimensions
-dim(expr_deg_cancer)
-dim(expr_deg_normal)
-
-# The number of columns must be 32 in both
-# The number of rows must match number of DEGs
-all(rownames(expr_deg_cancer) == rownames(expr_deg_normal))
-
-# Update (Michele)
-
-#########################################################################
-# Co-Expression Networks (Binary with Statistical Testing)
-#########################################################################
 
 ## Extract the DEG expression matrices -----------------------------------
 
@@ -483,7 +459,7 @@ all(rownames(expr_deg_cancer) == rownames(expr_deg_normal))
 
 cat("\nComputing correlations with significance testing...\n")
 
-# CANCER network
+# CANCER correlation
 cor.mat.c <- corr.test(
   t(expr_deg_cancer), 
   use = "pairwise",
@@ -499,10 +475,7 @@ qval.c <- cor.mat.c$p     # FDR-adjusted p-values
 # Mirror p-values to lower triangle
 qval.c[lower.tri(qval.c)] <- t(qval.c)[lower.tri(qval.c)]
 
-cat("Cancer correlations computed ✓\n")
-
-
-# NORMAL network
+# NORMAL correlation
 cor.mat.n <- corr.test(
   t(expr_deg_normal), 
   use = "pairwise",
@@ -517,8 +490,6 @@ diag(rho.n) <- 0
 qval.n <- cor.mat.n$p
 qval.n[lower.tri(qval.n)] <- t(qval.n)[lower.tri(qval.n)]
 
-cat("Normal correlations computed ✓\n")
-
 
 ## Build BINARY adjacency matrices ---------------------------------------
 # As per project requirements: binary adjacency where aij=0 if |ρ| < threshold
@@ -529,13 +500,8 @@ cat("Normal correlations computed ✓\n")
 
 # Set thresholds
 corr_threshold_c <- 0.7    # Cancer correlation threshold
-corr_threshold_n <- 0.75   # Normal correlation threshold (more stringent)
-pval_threshold <- 0.01     # Significance threshold (both networks)
-
-cat("\nBuilding binary adjacency matrices...\n")
-cat("Cancer - Correlation threshold: |ρ| ≥", corr_threshold_c, "\n")
-cat("Normal - Correlation threshold: |ρ| ≥", corr_threshold_n, "\n")
-cat("Both networks - Significance threshold: FDR <", pval_threshold, "\n\n")
+corr_threshold_n <- 0.8   # Normal correlation threshold (more stringent)
+pval_threshold <- 0.05     # Significance threshold (both networks)
 
 # Binary adjacency: 1 if BOTH conditions are met, 0 otherwise
 adj_mat_c <- ((abs(rho.c) >= corr_threshold_c) & (qval.c <= pval_threshold)) * 1
@@ -571,17 +537,34 @@ cat("  - Negative correlations:", neg_edges_n, "\n")
 density_c <- sum(adj_mat_c != 0) / (nrow(adj_mat_c) * (nrow(adj_mat_c) - 1))
 density_n <- sum(adj_mat_n != 0) / (nrow(adj_mat_n) * (nrow(adj_mat_n) - 1))
 
-if (density_c > 0.1 || density_n > 0.1) {
-  cat("\n⚠️  WARNING: Network is very dense (>10% of possible edges)\n")
-  cat("Consider: - Increasing corr_threshold (e.g., 0.75, 0.8)\n")
-  cat("          - Decreasing pval_threshold (e.g., 0.001)\n\n")
+if (density_c > 0.1) {
+  cat("\nWARNING (CANCER): Network is very dense (>10% of possible edges)\n")
+  cat("Consider:\n")
+  cat(" - Increasing corr_threshold (e.g., 0.75, 0.8)\n")
+  cat(" - Decreasing pval_threshold (e.g., 0.001)\n\n")
+} else if (density_c < 0.001) {
+  cat("\nWARNING (CANCER): Network is very sparse (<0.1% of possible edges)\n")
+  cat("Consider:\n")
+  cat(" - Decreasing corr_threshold (e.g., 0.6, 0.65)\n")
+  cat(" - Increasing pval_threshold (e.g., 0.05)\n\n")
+} else {
+  cat("\nCANCER: Network density is within a normal range:",density_c,"\n")
 }
 
-if (density_c < 0.001 || density_n < 0.001) {
-  cat("\n⚠️  WARNING: Network is very sparse (<0.1% of possible edges)\n")
-  cat("Consider: - Decreasing corr_threshold (e.g., 0.6, 0.65)\n")
-  cat("          - Increasing pval_threshold (e.g., 0.05)\n\n")
+if (density_n > 0.1) {
+  cat("\nWARNING (NORMAL): Network is very dense (>10% of possible edges)\n")
+  cat("Consider:\n")
+  cat(" - Increasing corr_threshold (e.g., 0.75, 0.8)\n")
+  cat(" - Decreasing pval_threshold (e.g., 0.001)\n\n")
+} else if (density_n < 0.001) {
+  cat("\nWARNING (NORMAL): Network is very sparse (<0.1% of possible edges)\n")
+  cat("Consider:\n")
+  cat(" - Decreasing corr_threshold (e.g., 0.6, 0.65)\n")
+  cat(" - Increasing pval_threshold (e.g., 0.05)\n\n")
+} else {
+  cat("\nNORMAL: Network density is within a normal range:",density_n,"\n")
 }
+
 
 
 ## Compute degree for each network ---------------------------------------
@@ -625,10 +608,10 @@ if (length(deg_freq_c) > 1) {
   plot(log10(as.numeric(names(deg_freq_c))), log10(as.numeric(deg_freq_c)), 
        main = "Cancer: Log-Log Degree Distribution", 
        xlab = "log10(Degree)", ylab = "log10(Frequency)", 
-       pch = 16, col = "blue", cex = 1.5)
+       pch = 16, col = "lightblue", cex = 0.5)
   # Add linear fit to check power-law
   fit_c <- lm(log10(as.numeric(deg_freq_c)) ~ log10(as.numeric(names(deg_freq_c))))
-  abline(fit_c, col = "red", lwd = 2)
+  abline(fit_c, col = "lightcoral", lwd = 2, lty = 2)
   legend("topright", legend = paste("R² =", round(summary(fit_c)$r.squared, 3)),
          bty = "n")
 }
@@ -643,9 +626,9 @@ if (length(deg_freq_n) > 1) {
   plot(log10(as.numeric(names(deg_freq_n))), log10(as.numeric(deg_freq_n)), 
        main = "Normal: Log-Log Degree Distribution", 
        xlab = "log10(Degree)", ylab = "log10(Frequency)", 
-       pch = 16, col = "green", cex = 1.5)
+       pch = 16, col = "lightgreen", cex = 0.5)
   fit_n <- lm(log10(as.numeric(deg_freq_n)) ~ log10(as.numeric(names(deg_freq_n))))
-  abline(fit_n, col = "red", lwd = 2)
+  abline(fit_c, col = "lightcoral", lwd = 2, lty = 2)
   legend("topright", legend = paste("R² =", round(summary(fit_n)$r.squared, 3)),
          bty = "n")
 }
@@ -694,99 +677,15 @@ print(head(hubs_n, 10))
 #   hubs_n = hubs in normal network
 #########################################################################
 
-## Compute adjacency matrices for cancer and normal -----------------------
-
-# Set correlation threshold 
-corr_threshold <- 0.7
-
-## Compute adjacency matrices for cancer and normal -----------------------
-
-# Cancer network
-# cor is faster then test.corr if you have only to compute the rho as here
-cor_mat_c <- cor(t(expr_deg_cancer), method = "pearson")  # Pearson correlation
-diag(cor_mat_c) <- 0  # Remove self-correlations
-adj_mat_c <- (abs(cor_mat_c) >= corr_threshold) * 1 # Binary adjacency
-
-# Normal network
-cor_mat_n <- cor(t(expr_deg_normal), method = "pearson")
-diag(cor_mat_n) <- 0
-adj_mat_n <- (abs(cor_mat_n) >= corr_threshold) * 1
-
-## Compute degree for each network ---------------------------------------
-
-degree_c <- colSums(adj_mat_c != 0)
-names(degree_c) <- rownames(adj_mat_c)
-degree_c <- sort(degree_c, decreasing = TRUE)
-
-degree_n <- colSums(adj_mat_n != 0)
-names(degree_n) <- rownames(adj_mat_n)
-degree_n <- sort(degree_n, decreasing = TRUE)
-
-## Check if scale-free network (plot degree distribution) ----------------
-
-# Cancer degree distribution
-hist(degree_c, breaks = 50, main = "Cancer Network Degree Distribution",
-     xlab = "Degree", col = "lightblue", freq = FALSE)
-
-# To check scale-free: plot log-log (degree vs frequency)
-deg_freq_c <- table(degree_c)
-plot(log(as.numeric(names(deg_freq_c))), log(deg_freq_c), 
-     main = "Cancer: Log-Log Degree Distribution", xlab = "log(Degree)", ylab = "log(Frequency)", 
-     pch = 16, col = "blue")
-
-# Normal degree distribution
-hist(degree_n, breaks = 50, main = "Normal Network Degree Distribution",
-     xlab = "Degree", col = "lightgreen", freq = FALSE)
-
-deg_freq_n <- table(degree_n)
-plot(log(as.numeric(names(deg_freq_n))), log(deg_freq_n), 
-     main = "Normal: Log-Log Degree Distribution", xlab = "log(Degree)", ylab = "log(Frequency)", 
-     pch = 16, col = "green")
-
-## Find hubs (top 5% highest degree) -------------------------------------
-
-y <- quantile(degree_n[degree_n>0], 0.95)
-x <- quantile(degree_c[degree_c>0], 0.95)
-
-hubs_c <- degree_c[degree_c>=x]
-
-hubs_n <- degree_n[degree_n>=y]
-
-
-## Compare hubs between conditions ---------------------------------------
-
-# Common hubs
-common_hubs <- intersect(names(hubs_c), names(hubs_n))
-
-# Hubs unique to cancer
-selective_hubs_c <- setdiff(names(hubs_c), names(hubs_n))
-
-# Hubs unique to normal
-selective_hubs_n <- setdiff(names(hubs_n), names(hubs_c))
-
-# Output
-cat("Number of cancer hubs:", length(hubs_c), "\n")
-cat("Number of normal hubs:", length(hubs_n), "\n")
-cat("Number of common hubs:", length(common_hubs), "\n")
-cat("Number of selective hubs in cancer:", length(selective_hubs_c), "\n")
-cat("Number of selective hubs in normal:", length(selective_hubs_n), "\n")
-
-#########################################################################
-# Output:
-#   adj_mat_c = adjacency matrix for cancer co-expression network
-#   adj_mat_n = adjacency matrix for normal co-expression network
-#   hubs_c = hubs in cancer network
-#   hubs_n = hubs in normal network
-#########################################################################
-
 #########################################################################
 #
 # Differential Co-expressed Network
 #
 #########################################################################
 
+library(poweRlaw)
 # Set Z-score threshold 
-z_threshold <- 4 # SCELTO PIU' RESTRITTIVO PER FAR VENIRE RETE MENO DENSA -> POWER-LAW +-
+z_threshold <- 5 # SCELTO PIU' RESTRITTIVO PER FAR VENIRE RETE MENO DENSA -> POWER-LAW +-
 
 # Sample sizes
 n_c <- ncol(expr_deg_cancer)  # Number of cancer samples
@@ -800,8 +699,8 @@ fisher_z <- function(r) {
 }
 
 # Compute Z-transforms for cancer and normal correlations
-z_c <- fisher_z(cor_mat_c)
-z_n <- fisher_z(cor_mat_n)
+z_c <- fisher_z(rho.c)
+z_n <- fisher_z(rho.n)
 
 # Compute Z-score for difference: (z_c - z_n) / sqrt(1/(n_c-3) + 1/(n_n-3))
 se <- sqrt(1/(n_c - 3) + 1/(n_n - 3))
@@ -824,14 +723,18 @@ degree_diff <- sort(degree_diff, decreasing = TRUE)
 
 # Differential network degree distribution
 hist(degree_diff, breaks = 50, main = "Differential Network Degree Distribution", 
-     xlab = "Degree", col = "lightcoral", freq = FALSE)
+     xlab = "Degree", col = "plum", freq = FALSE)
 
 # Log-log plot
 deg_freq_diff <- table(degree_diff)
 if (length(deg_freq_diff) > 1) {
   plot(log(as.numeric(names(deg_freq_diff))), log(deg_freq_diff), 
        main = "Differential: Log-Log Degree Distribution", xlab = "log(Degree)", ylab = "log(Frequency)", 
-       pch = 16, col = "red")
+       pch = 16, col = "plum", cex = 0.8)
+  #fit_z <- lm(log10(as.numeric(deg_freq_diff)) ~ log10(as.numeric(names(deg_freq_diff))))
+  #abline(fit_z, col = "lightcoral", lwd = 2, lty = 2)
+  #legend("topright", legend = paste("R² =", round(summary(fit_z)$r.squared, 3)),
+  #      bty = "n")
 }
 
 ## Find hubs (top 5% highest degree) -------------------------------------
