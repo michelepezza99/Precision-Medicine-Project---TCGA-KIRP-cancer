@@ -21,9 +21,9 @@ gc()                 # garbage collection
 The first step is to loading the required packages for the analysis:
 
 ```{r message=FALSE}
-library(BiocGenerics) # Contains generic Bioconductor functions used internally by SummarizedExperiment and DESeq2
+library(BiocGenerics) # Contains Bioconductor generics used internally by SummarizedExperiment and DESeq2
 library(DESeq2) # Store RNA-Seq counts and normalize counts
-library(psych) # for correlation analysis
+library(psych) # correlation analysis + p-value adjustment
 library(NetworkToolbox) # Additional functions for network analysis
 library(ggplot2) # volcano plot, degree distribution plot and any additional plot
 # library(ggnet)    
@@ -38,7 +38,7 @@ library(igraph)
 library(maftools)
 library(SNFtool)
 library(reshape2)
-
+library(poweRlaw)
 # sessionInfo()
 ```
 
@@ -63,10 +63,10 @@ rna.query.C <- TCGAbiolinks::GDCquery(
 )
 ```
 
-Download the data from GDC to local cache folder "GDCdata" **(run only once)**
+Download the data from GDC to local cache folder "GDCdata" a
 
 ```{r message=FALSE}
-# GDCdownload(query = rna.query.C, directory = "GDCdata", method = "api")
+GDCdownload(query = rna.query.C, directory = "GDCdata", method = "api")
 ```
 
 Convert the downloaded files into a SummarizedExperiment object
@@ -367,17 +367,21 @@ dim(counts(dds)) # should be 60660 x 64
 
 ### Filter low-expression genes
 
-At least 10 counts in 90% of patients for each group
-
-We have 32 normal and 32 cancer → threshold = 0.90 \* 32 ≈ 28.8 → floor = 28
+At least 10 counts in 90% of **all** samples (32 normal + 32 cancer = 64 → 90% = 57)
 
 ```{r}
-threshold <- floor(0.9 * ncol(expr.N)) # = 28
+total_samples <- ncol(expr.N) + ncol(expr.C)  # 64
+threshold <- floor(0.9 * total_samples)       # 57
 
-keep <- rowSums(counts(dds) >= 10) >= threshold 
+cat("Total samples:", total_samples, "\n")
+cat("Filtering threshold (90%):", threshold, "samples\n")
+
+keep <- rowSums(counts(dds) >= 10) >= threshold
 dds <- dds[keep, ]
 
-dim(counts(dds)) # reduced number of genes
+cat("Genes before filtering:", nrow(full.data), "\n")
+cat("Genes after filtering:", nrow(dds), "\n")
+cat("Genes removed:", nrow(full.data) - sum(keep), "\n")
 ```
 
 ### Normalize using DESeq2 size factors
@@ -444,7 +448,7 @@ These matrices are what we will use for:
 
 -   PSN and SNF
 
-## 2. Differential Expression Analysis (DEGs) — UPDATED THRESHOLDS
+## 2. Differential Expression Analysis (DEGs)
 
 ### Compute log2 Fold Change
 
@@ -484,11 +488,11 @@ deg.table <- data.frame(
 )
 ```
 
-### Apply NEW thresholds
+### Apply thresholds
 
 ```{r}
-FDR_threshold <- 0.001
-FC_threshold  <- 2.0
+FDR_threshold <- 0.05
+FC_threshold  <- 2
 
 deg.genes <- subset(
   deg.table,
@@ -519,7 +523,7 @@ DEG_list <- rownames(deg.genes)
 length(DEG_list)
 ```
 
-## 3. CoExpression Networks
+## 3. CoExpression Networks (Binary with Statistical Testing)
 
 ### Extract the DEG expression matrices
 
@@ -530,7 +534,7 @@ expr_deg_cancer <- filtr.expr.c[DEG_list, ]
 expr_deg_normal <- filtr.expr.n[DEG_list, ]
 ```
 
-Log transform (as asked by the professor)
+Log transform
 
 ```{r}
 expr_deg_cancer <- log2(expr_deg_cancer + 1)
@@ -542,38 +546,70 @@ Check dimensions
 ```{r}
 dim(expr_deg_cancer)
 dim(expr_deg_normal)
-```
-
-The number of columns must be 32 in both and the number of rows must match number of DEGs
-
-```{r}
 all(rownames(expr_deg_cancer) == rownames(expr_deg_normal))
 ```
 
-### Compute adjacency matrices for cancer and normal
-
-Set correlation threshold
+### Compute correlations with statistical testing
 
 ```{r}
-corr_threshold <- 0.7
+# Cancer correlation with FDR-adjusted p-values
+cor.mat.c <- corr.test(
+  t(expr_deg_cancer), 
+  use = "pairwise",
+  method = "pearson",
+  adjust = "fdr",
+  ci = FALSE
+)
+
+rho.c <- cor.mat.c$r
+diag(rho.c) <- 0
+qval.c <- cor.mat.c$p
+qval.c[lower.tri(qval.c)] <- t(qval.c)[lower.tri(qval.c)]
+
+# Normal correlation with FDR-adjusted p-values
+cor.mat.n <- corr.test(
+  t(expr_deg_normal), 
+  use = "pairwise",
+  method = "pearson",
+  adjust = "fdr",
+  ci = FALSE
+)
+
+rho.n <- cor.mat.n$r
+diag(rho.n) <- 0
+qval.n <- cor.mat.n$p
+qval.n[lower.tri(qval.n)] <- t(qval.n)[lower.tri(qval.n)]
 ```
 
-### Compute adjacency matrices for cancer and normal
+### Build BINARY adjacency matrices
 
-Cancer network (cor is faster then test.corr if you have only to compute the rho as here)
+Both statistical significance (FDR) and correlation magnitude are enforced.
 
 ```{r}
-cor_mat_c <- cor(t(expr_deg_cancer), method = "pearson")  # Pearson correlation
-diag(cor_mat_c) <- 0  # Remove self-correlations
-adj_mat_c <- (abs(cor_mat_c) >= corr_threshold) * 1 # Binary adjacency
+corr_threshold_c <- 0.6  # Cancer correlation threshold
+corr_threshold_n <- 0.8 # Normal correlation threshold (more stringent)
+pval_threshold   <- 0.05 # FDR-adjusted p-value threshold
+
+adj_mat_c <- ((abs(rho.c) >= corr_threshold_c) & (qval.c <= pval_threshold)) * 1
+adj_mat_n <- ((abs(rho.n) >= corr_threshold_n) & (qval.n <= pval_threshold)) * 1
 ```
 
-Normal network
+### Network density check 
 
 ```{r}
-cor_mat_n <- cor(t(expr_deg_normal), method = "pearson")
-diag(cor_mat_n) <- 0
-adj_mat_n <- (abs(cor_mat_n) >= corr_threshold) * 1
+cat("=== Cancer Network Statistics ===\n")
+cat("Total possible edges:", nrow(adj_mat_c) * (nrow(adj_mat_c) - 1) / 2, "\n")
+cat("Significant edges:", sum(adj_mat_c != 0) / 2, "\n")
+cat("Network density:", round(sum(adj_mat_c != 0) / (nrow(adj_mat_c) * (nrow(adj_mat_c) - 1)), 4), "\n")
+cat("  - Positive correlations:", sum((adj_mat_c == 1) & (rho.c > 0)) / 2, "\n")
+cat("  - Negative correlations:", sum((adj_mat_c == 1) & (rho.c < 0)) / 2, "\n\n")
+
+cat("=== Normal Network Statistics ===\n")
+cat("Total possible edges:", nrow(adj_mat_n) * (nrow(adj_mat_n) - 1) / 2, "\n")
+cat("Significant edges:", sum(adj_mat_n != 0) / 2, "\n")
+cat("Network density:", round(sum(adj_mat_n != 0) / (nrow(adj_mat_n) * (nrow(adj_mat_n) - 1)), 4), "\n")
+cat("  - Positive correlations:", sum((adj_mat_n == 1) & (rho.n > 0)) / 2, "\n")
+cat("  - Negative correlations:", sum((adj_mat_n == 1) & (rho.n < 0)) / 2, "\n")
 ```
 
 ### Compute degree for each network
@@ -600,10 +636,16 @@ hist(degree_c, breaks = 50, main = "Cancer Network Degree Distribution",
 To check scale-free: plot log-log (degree vs frequency)
 
 ```{r}
-deg_freq_c <- table(degree_c)
-plot(log(as.numeric(names(deg_freq_c))), log(deg_freq_c), 
-     main = "Cancer: Log-Log Degree Distribution", xlab = "log(Degree)", ylab = "log(Frequency)", 
-     pch = 16, col = "blue")
+deg_freq_c <- table(degree_c[degree_c > 0])
+if (length(deg_freq_c) > 1) {
+  plot(log10(as.numeric(names(deg_freq_c))), log10(as.numeric(deg_freq_c)), 
+       main = "Cancer: Log-Log Degree Distribution", xlab = "Degree", ylab = "Frequency", 
+       pch = 16, col = "lightblue", cex = 1.0)
+  fit_c <- lm(log10(as.numeric(deg_freq_c)) ~ log10(as.numeric(names(deg_freq_c))))
+  abline(fit_c, col = "lightcoral", lwd = 2, lty = 2)
+  legend("topright", legend = paste("R² =", round(summary(fit_c)$r.squared, 3)),
+         bty = "n")
+}
 ```
 
 Normal Network degree distribution
@@ -611,11 +653,21 @@ Normal Network degree distribution
 ```{r}
 hist(degree_n, breaks = 50, main = "Normal Network Degree Distribution",
      xlab = "Degree", col = "lightgreen", freq = FALSE)
+```
 
-deg_freq_n <- table(degree_n)
-plot(log(as.numeric(names(deg_freq_n))), log(deg_freq_n), 
-     main = "Normal: Log-Log Degree Distribution", xlab = "log(Degree)", ylab = "log(Frequency)", 
-     pch = 16, col = "green")
+To check scale-free: plot log-log (degree vs frequency)
+
+```{r}
+deg_freq_n <- table(degree_n[degree_n > 0])
+if (length(deg_freq_n) > 1) {
+  plot(log10(as.numeric(names(deg_freq_n))), log10(as.numeric(deg_freq_n)), 
+       main = "Normal: Log-Log Degree Distribution", xlab = "Degree", ylab = "Frequency", 
+       pch = 16, col = "lightgreen", cex = 1.0)
+  fit_n <- lm(log10(as.numeric(deg_freq_n)) ~ log10(as.numeric(names(deg_freq_n))))
+  abline(fit_n, col = "lightcoral", lwd = 2, lty = 2)
+  legend("topright", legend = paste("R² =", round(summary(fit_n)$r.squared, 3)),
+         bty = "n")
+}
 ```
 
 ### Find hubs (top 5% highest degree)
@@ -625,7 +677,6 @@ y <- quantile(degree_n[degree_n>0], 0.95)
 x <- quantile(degree_c[degree_c>0], 0.95)
 
 hubs_c <- degree_c[degree_c>=x]
-
 hubs_n <- degree_n[degree_n>=y]
 ```
 
@@ -674,7 +725,7 @@ cat("Number of selective hubs in normal:", length(selective_hubs_n), "\n")
 Set Z-score threshold
 
 ```{r}
-z_threshold <- 4 # SCELTO PIU' RESTRITTIVO PER FAR VENIRE RETE MENO DENSA -\> POWER-LAW +-
+z_threshold <- 5 # more restrictive to keep the network sparser
 ```
 
 Sample sizes
@@ -697,8 +748,8 @@ fisher_z <- function(r) {
 Compute Z-transforms for cancer and normal correlations
 
 ```{r}
-z_c <- fisher_z(cor_mat_c)
-z_n <- fisher_z(cor_mat_n)
+z_c <- fisher_z(rho.c)
+z_n <- fisher_z(rho.n)
 ```
 
 Compute Z-score for difference: (z_c - z_n) / sqrt(1/(n_c-3) + 1/(n_n-3))
@@ -735,7 +786,7 @@ Differential network degree distribution
 
 ```{r}
 hist(degree_diff, breaks = 50, main = "Differential Network Degree Distribution", 
-     xlab = "Degree", col = "lightcoral", freq = FALSE)
+     xlab = "Degree", col = "plum", freq = FALSE)
 ```
 
 Log-log plot
@@ -745,7 +796,7 @@ deg_freq_diff <- table(degree_diff)
 if (length(deg_freq_diff) > 1) {
   plot(log(as.numeric(names(deg_freq_diff))), log(deg_freq_diff), 
        main = "Differential: Log-Log Degree Distribution", xlab = "log(Degree)", ylab = "log(Frequency)", 
-       pch = 16, col = "red")
+       pch = 16, col = "plum", cex = 0.8) 
 }
 ```
 
@@ -1001,6 +1052,8 @@ ggnet2(net_final,
   ggtitle("PSN Community Structure (Louvain)")
 ```
 
+## 5. Patient Similarity Network (PSN)
+
 ### c. Similarity Network Fusion
 
 #### Download & Processing of Mutation Data
@@ -1241,13 +1294,14 @@ print(conf_matrix)
 ```
 
 Transform the table in a dataframe for the plot
+
 ```{r}
 melted_cmat <- as.data.frame(as.table(conf_matrix))
 colnames(melted_cmat) <- c("RNA_Group", "SNF_Group", "Count")
 ```
 
-
 Plot
+
 ```{r}
 ggplot(melted_cmat, aes(x = SNF_Group, y = RNA_Group, fill = Count)) +
   geom_tile(color = "white") +
@@ -1259,4 +1313,3 @@ ggplot(melted_cmat, aes(x = SNF_Group, y = RNA_Group, fill = Count)) +
   theme_minimal() +
   theme(panel.grid.major = element_blank())
 ```
-
