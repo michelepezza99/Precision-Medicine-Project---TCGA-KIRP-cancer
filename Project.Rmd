@@ -12,7 +12,7 @@ output: html_notebook
 4.  Differential CoExpression Network
 5.  Patient Similarity Network
 
-```{r}
+```{r, results='hide'}
 # TCGA-KIRP:
 rm(list = ls())      # clear workspace
 gc()                 # garbage collection
@@ -46,7 +46,7 @@ library(poweRlaw)
 
 We proceed to download the required tumor RNA-Seq data (Primary Tumor)
 
-```{r message=FALSE}
+```{r message=FALSE, results='hide'}
 proj <- "TCGA-KIRP"
 dir.create(file.path(proj))
 ```
@@ -71,7 +71,7 @@ GDCdownload(query = rna.query.C, directory = "GDCdata", method = "api")
 
 Convert the downloaded files into a SummarizedExperiment object
 
-```{r message=FALSE}
+```{r message=FALSE, results='hide'}
 rna.data.C <- GDCprepare(rna.query.C, directory = "GDCdata")
 ```
 
@@ -118,7 +118,7 @@ GDCdownload(query = rna.query.N, directory = "GDCdata", method = "api")
 
 Prepare SummarizedExperiment for normal samples
 
-```{r message=FALSE}
+```{r message=FALSE, results='hide'}
 rna.data.N <- GDCprepare(rna.query.N, directory = "GDCdata")
 ```
 
@@ -155,12 +155,6 @@ Results:
 
 -   Gene annotation: identical between tumor and normal
 
-### Clinical Data (To be done, not needed now)
-
-```{r}
-
-```
-
 ### Data cleaning
 
 #### Inspect basic structure
@@ -195,7 +189,7 @@ length(unique(patients.N))
 
 Distribution of tumor samples per patient (to detect duplicates)
 
-```{r}
+```{r,results='hide'}
 sort(table(patients.C))
 ```
 
@@ -268,6 +262,17 @@ Subset both matrices to the same set of patients
 ```{r}
 expr.C <- expr.C[, common_ids, drop = FALSE] 
 expr.N <- expr.N[, common_ids, drop = FALSE]
+```
+#### Remove genes with zero counts in ANY sample
+We remove genes that have zero counts in at least one sample (tumor or normal) since they do not provide useful information for differential expression analysis and we aim to avoid mathematical issues during log fold change calculations.
+```{r}
+nonzero_genes <- rowSums(expr.C == 0) == 0 & rowSums(expr.N == 0) == 0
+
+expr.C <- expr.C[nonzero_genes, ]
+expr.N <- expr.N[nonzero_genes, ]
+
+cat("Genes kept:", sum(nonzero_genes), "\n")
+
 ```
 
 Sanity checks
@@ -416,7 +421,7 @@ colnames(filtr.expr.c) <- colnames(expr.C)
 
 ### Final checks
 
-```{r}
+```{r,results='hide'}
 # Same genes
 all(rownames(filtr.expr.c) == rownames(filtr.expr.n))
 
@@ -427,6 +432,9 @@ nrow(filtr.expr.c)   # number of filtered/normalized genes
 ncol(filtr.expr.c)   # should be 32
 
 sizeFactors(dds)
+
+```
+```{r}
 summary(sizeFactors(dds))
 ```
 
@@ -594,7 +602,7 @@ adj_mat_c <- ((abs(rho.c) >= corr_threshold_c) & (qval.c <= pval_threshold)) * 1
 adj_mat_n <- ((abs(rho.n) >= corr_threshold_n) & (qval.n <= pval_threshold)) * 1
 ```
 
-### Network density check 
+### Network density check
 
 ```{r}
 cat("=== Cancer Network Statistics ===\n")
@@ -928,7 +936,7 @@ dim(patient_sim_matrix)
 
 #### Manage negative correlations
 
-We're only intrested in positive correlations
+We're only interested in positive correlations
 
 ```{r}
 patient_sim_matrix[patient_sim_matrix<0] <- 0
@@ -1052,6 +1060,128 @@ ggnet2(net_final,
   ggtitle("PSN Community Structure (Louvain)")
 ```
 
+## 5. PSN USING NORMAL GENE EXPRESSION
+
+Data preparation
+
+```{r}
+target_data_normal <- as.matrix(expr_deg_normal)   # DEGs × Patients (normal samples)
+
+cat("Dimensioni matrice NORMAL (DEGs x Patients):\n")
+print(dim(target_data_normal))
+```
+
+Similarity matrix calculation
+
+```{r}
+psn_normal_matrix <- cor(target_data_normal, method = "pearson")
+
+# Remove auto-correlations
+diag(psn_normal_matrix) <- 0
+
+# Consider only positive correlations
+psn_normal_matrix[psn_normal_matrix < 0] <- 0
+```
+
+Create the network object
+
+```{r}
+psn_graph_normal <- graph_from_adjacency_matrix(
+  psn_normal_matrix,
+  mode = "undirected",
+  weighted = TRUE,
+  diag = FALSE
+)
+cat("NORMAL PSN — Nodes:", vcount(psn_graph_normal),
+    "Edges:", ecount(psn_graph_normal), "\n")
+```
+
+Community detection with Louvain
+
+```{r}
+
+louvain_normal <- cluster_louvain(psn_graph_normal)
+
+comm_res_normal <- data.frame(
+  patient = names(membership(louvain_normal)),
+  community_normal = as.character(membership(louvain_normal)),
+  stringsAsFactors = FALSE
+)
+
+cat("Number of communities (NORMAL):",
+    length(unique(comm_res_normal$community_normal)), "\n")
+```
+
+Preparation for plotting
+
+```{r}
+
+plot_threshold <- 0.7
+psn_plot_mat <- psn_normal_matrix
+psn_plot_mat[psn_plot_mat < plot_threshold] <- 0
+
+
+net_normal <- network(psn_plot_mat,
+                      matrix.type = "adjacency",
+                      ignore.eval = FALSE,
+                      names.eval = "weights",
+                      directed = FALSE)
+
+net_names_norm <- network.vertex.names(net_normal)
+net_normal %v% "community" <- comm_res_normal$community_normal[
+  match(net_names_norm, comm_res_normal$patient)
+]
+```
+
+Plot Normal PSN
+
+```{r}
+set.seed(77)
+n_comm_norm <- length(unique(net_normal %v% "community"))
+palette_norm <- sample(colors(distinct = TRUE), n_comm_norm)
+names(palette_norm) <- sort(unique(net_normal %v% "community"))
+
+ggnet2(net_normal,
+       color = "community",
+       palette = palette_norm,
+       size = 6,
+       label = TRUE,
+       label.size = 3,
+       edge.color = "gray85",
+       edge.alpha = 0.8) +
+  ggtitle("Patient Similarity Network — NORMAL (DEGs)")
+```
+
+Comparison between Tumor and Normal PSNs
+
+```{r}
+comparison_psn <- merge(comm_res, comm_res_normal, by = "patient")
+colnames(comparison_psn) <- c("Patient", "Cancer_Community", "Normal_Community")
+conf_mat_norm <- table(
+  Cancer = comparison_psn$Cancer_Community,
+  Normal = comparison_psn$Normal_Community
+)
+print("Confusion Matrix (Cancer vs Normal PSN):")
+print(conf_mat_norm)
+```
+
+Heatmap of the confusion matrix
+
+```{r}
+melt_norm <- as.data.frame(as.table(conf_mat_norm))
+colnames(melt_norm) <- c("Cancer_Group", "Normal_Group", "Count")
+
+ggplot(melt_norm, aes(x = Normal_Group, y = Cancer_Group, fill = Count)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Count), color = "black", size = 5) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(title = "Comparison: PSN Cancer vs PSN Normal",
+       x = "Normal communities",
+       y = "Cancer communities") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank())
+```
+
 ## 5. Patient Similarity Network (PSN)
 
 ### c. Similarity Network Fusion
@@ -1072,7 +1202,7 @@ query_mut <- TCGAbiolinks::GDCquery(
 Actual download **run only once**
 
 ```{r message=FALSE}
-#GDCdownload(query = query_mut, directory = "GDCdata", method = "api")
+GDCdownload(query = query_mut, directory = "GDCdata", method = "api")
 ```
 
 Convert the downloaded files into a SummarizedExperiment object
@@ -1312,4 +1442,158 @@ ggplot(melted_cmat, aes(x = SNF_Group, y = RNA_Group, fill = Count)) +
        y = "RNA-Only Communities (5.1)") +
   theme_minimal() +
   theme(panel.grid.major = element_blank())
+```
+
+# PSN Communities Characterization (Clinical & Survival)
+
+Stage 1 merges biological, clinical, and network-based information into a single patient-level table that will allow us to understand what defines each community and whether communities differ in survival or mutation patterns.
+
+## 6. Clinical Data Integration
+
+### Load libraries
+
+```{r message=FALSE}
+library(dplyr)
+library(survival)
+library(survminer)
+library(maftools)
+library(TCGAbiolinks)
+library(stringr)
+library(tidyr)
+
+
+```
+
+```{r}
+length(unique(comm_res_snf$patient))
+head(comm_res_snf)
+```
+
+```{r, results='hide'}
+query_clin <- GDCquery(
+  project = proj,
+  data.category = "Clinical",
+  data.type = "Clinical Supplement",
+  data.format = "BCR XML"
+)
+
+# Only run once (then comment)
+GDCdownload(query = query_clin)
+
+clinical_kirp <- GDCprepare_clinic(query_clin, clinical.info = "patient")
+
+```
+
+```{r}
+clinical_kirp <- clinical_kirp %>%
+  mutate(
+    patient = bcr_patient_barcode,
+    survival_time = ifelse(!is.na(days_to_death),
+                           days_to_death,
+                           days_to_last_followup),
+    survival_status = ifelse(vital_status == "Dead", 1, 0)
+  ) %>%
+  filter(!is.na(survival_time)) %>%
+  select(patient, survival_time, survival_status, age_at_initial_pathologic_diagnosis, gender)
+head(clinical_kirp)
+```
+
+```{r}
+# Standardize patient column
+comm_res$patient     <- substr(comm_res$patient, 1, 12)
+comm_res_normal$patient <- substr(comm_res_normal$patient, 1, 12)
+comm_res_snf$patient <- substr(comm_res_snf$patient, 1, 12)
+clinical_kirp$patient <- substr(clinical_kirp$patient, 1, 12)
+
+rownames(mut_matrix_binary) <- substr(rownames(mut_matrix_binary), 1, 12)
+```
+
+```{r}
+str(mut_matrix_binary)  # patients × genes (0/1)
+```
+
+```{r}
+DDR_genes  <- c("TP53", "ATM", "ATR", "BRCA1", "BRCA2", "CHEK1", "CHEK2")
+TP53_path  <- c("TP53")
+WNT_genes  <- c("APC", "CTNNB1", "AXIN1", "LRP5", "LRP6")
+RTK_RAS_genes <- c("KRAS", "NRAS", "HRAS", "BRAF", "EGFR", "ERBB2")
+PI3K_genes <- c("PIK3CA", "PTEN", "AKT1", "AKT2")
+
+```
+
+```{r}
+DDR_genes      <- intersect(DDR_genes, colnames(mut_matrix_binary))
+TP53_path      <- intersect(TP53_path, colnames(mut_matrix_binary))
+WNT_genes      <- intersect(WNT_genes, colnames(mut_matrix_binary))
+RTK_RAS_genes  <- intersect(RTK_RAS_genes, colnames(mut_matrix_binary))
+PI3K_genes     <- intersect(PI3K_genes, colnames(mut_matrix_binary))
+```
+
+```{r}
+pathway_matrix <- data.frame(
+  patient = rownames(mut_matrix_binary),
+  DDR      = as.integer(rowSums(mut_matrix_binary[, DDR_genes, drop = FALSE]) > 0),
+  TP53     = as.integer(rowSums(mut_matrix_binary[, TP53_path, drop = FALSE]) > 0),
+  WNT      = as.integer(rowSums(mut_matrix_binary[, WNT_genes, drop = FALSE]) > 0),
+  RTK_RAS  = as.integer(rowSums(mut_matrix_binary[, RTK_RAS_genes, drop = FALSE]) > 0),
+  PI3K     = as.integer(rowSums(mut_matrix_binary[, PI3K_genes, drop = FALSE]) > 0)
+)
+
+```
+
+```{r}
+tmb_res <- tmb(maf_obj)
+tmb_df <- tmb_res %>%
+  select(Tumor_Sample_Barcode, total_perMB) %>%
+  mutate(
+    patient = substr(Tumor_Sample_Barcode, 1, 12),
+    TMB = total_perMB,
+    TMB_high = TMB > 10
+  ) %>%
+  select(patient, TMB, TMB_high)
+
+```
+
+```{r}
+clinical_kirp <- clinical_kirp %>%
+  distinct(patient, .keep_all = TRUE)
+clinical_kirp <- clinical_kirp %>% 
+  filter(!is.na(survival_time), !is.na(survival_status))
+
+
+```
+
+```{r}
+master_table <- comm_res_snf %>%
+  rename(cluster_snf = community_snf) %>%
+  
+  # Add RNA-only PSN clusters
+  left_join(comm_res %>% rename(cluster_rna = community),
+            by = "patient") %>%
+  
+  # Add clinical survival data
+  left_join(clinical_kirp,
+            by = "patient") %>%
+  
+  # Add mutation pathway indicators
+  left_join(pathway_matrix,
+            by = "patient") %>%
+  
+  # Add TMB
+  left_join(tmb_df,
+            by = "patient")
+
+```
+
+```{r}
+# Remove duplicates from master table
+master_table <- master_table %>%
+  distinct(patient, .keep_all = TRUE)
+```
+
+```{r}
+cat("Number of patients in master table:", nrow(master_table), "\n")
+head(master_table, 10)
+summary(master_table)
+
 ```
