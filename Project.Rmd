@@ -531,33 +531,31 @@ DEG_list <- rownames(deg.genes)
 length(DEG_list)
 ```
 
-## 3. CoExpression Networks (Binary with Statistical Testing)
+## 3. Co-Expression Networks
 
-### Extract the DEG expression matrices
+### 3.1 Data Preparation
 
-Keep only DEGs in the normalized matrices
+Extract DEG expression matrices and apply log transformation for correlation analysis.
 
 ```{r}
+# Keep only DEGs in the normalized matrices
 expr_deg_cancer <- filtr.expr.c[DEG_list, ]
 expr_deg_normal <- filtr.expr.n[DEG_list, ]
-```
 
-Log transform
-
-```{r}
+# Log transform for correlation analysis
 expr_deg_cancer <- log2(expr_deg_cancer + 1)
 expr_deg_normal <- log2(expr_deg_normal + 1)
+
+# Verify dimensions
+cat("Expression matrix dimensions:\n")
+cat(sprintf("  Cancer: %d genes × %d samples\n", nrow(expr_deg_cancer), ncol(expr_deg_cancer)))
+cat(sprintf("  Normal: %d genes × %d samples\n", nrow(expr_deg_normal), ncol(expr_deg_normal)))
+cat(sprintf("  Genes aligned: %s\n", all(rownames(expr_deg_cancer) == rownames(expr_deg_normal))))
 ```
 
-Check dimensions
+### 3.2 Network Computation
 
-```{r}
-dim(expr_deg_cancer)
-dim(expr_deg_normal)
-all(rownames(expr_deg_cancer) == rownames(expr_deg_normal))
-```
-
-### Compute correlations with statistical testing
+Compute Pearson correlation matrices with FDR-adjusted p-values for both conditions.
 
 ```{r}
 # Cancer correlation with FDR-adjusted p-values
@@ -589,40 +587,43 @@ qval.n <- cor.mat.n$p
 qval.n[lower.tri(qval.n)] <- t(qval.n)[lower.tri(qval.n)]
 ```
 
-### Build BINARY adjacency matrices
-
-Both statistical significance (FDR) and correlation magnitude are enforced.
+Build binary adjacency matrices using correlation and significance thresholds.
 
 ```{r}
-corr_threshold_c <- 0.6  # Cancer correlation threshold
-corr_threshold_n <- 0.8 # Normal correlation threshold (more stringent)
-pval_threshold   <- 0.05 # FDR-adjusted p-value threshold
+# Define thresholds
+corr_threshold_c <- 0.7   # Cancer correlation threshold
+corr_threshold_n <- 0.8   # Normal correlation threshold (more stringent)
+pval_threshold  <- 0.05  # FDR-adjusted p-value threshold
 
+# Build binary adjacency matrices
 adj_mat_c <- ((abs(rho.c) >= corr_threshold_c) & (qval.c <= pval_threshold)) * 1
 adj_mat_n <- ((abs(rho.n) >= corr_threshold_n) & (qval.n <= pval_threshold)) * 1
 ```
 
-### Network density check
-
 ```{r}
-cat("=== Cancer Network Statistics ===\n")
-cat("Total possible edges:", nrow(adj_mat_c) * (nrow(adj_mat_c) - 1) / 2, "\n")
-cat("Significant edges:", sum(adj_mat_c != 0) / 2, "\n")
-cat("Network density:", round(sum(adj_mat_c != 0) / (nrow(adj_mat_c) * (nrow(adj_mat_c) - 1)), 4), "\n")
-cat("  - Positive correlations:", sum((adj_mat_c == 1) & (rho.c > 0)) / 2, "\n")
-cat("  - Negative correlations:", sum((adj_mat_c == 1) & (rho.c < 0)) / 2, "\n\n")
+# Detailed network statistics
+cat("\n=== CANCER NETWORK STATISTICS ===\n")
+cat(sprintf("Total possible edges: %d\n", nrow(adj_mat_c) * (nrow(adj_mat_c) - 1) / 2))
+cat(sprintf("Significant edges: %d\n", sum(adj_mat_c != 0) / 2))
+cat(sprintf("Network density: %.4f\n", sum(adj_mat_c != 0) / (nrow(adj_mat_c) * (nrow(adj_mat_c) - 1))))
+cat(sprintf("  - Positive correlations: %d\n", sum((adj_mat_c == 1) & (rho.c > 0)) / 2))
+cat(sprintf("  - Negative correlations: %d\n", sum((adj_mat_c == 1) & (rho.c < 0)) / 2))
 
-cat("=== Normal Network Statistics ===\n")
-cat("Total possible edges:", nrow(adj_mat_n) * (nrow(adj_mat_n) - 1) / 2, "\n")
-cat("Significant edges:", sum(adj_mat_n != 0) / 2, "\n")
-cat("Network density:", round(sum(adj_mat_n != 0) / (nrow(adj_mat_n) * (nrow(adj_mat_n) - 1)), 4), "\n")
-cat("  - Positive correlations:", sum((adj_mat_n == 1) & (rho.n > 0)) / 2, "\n")
-cat("  - Negative correlations:", sum((adj_mat_n == 1) & (rho.n < 0)) / 2, "\n")
+cat("\n=== NORMAL NETWORK STATISTICS ===\n")
+cat(sprintf("Total possible edges: %d\n", nrow(adj_mat_n) * (nrow(adj_mat_n) - 1) / 2))
+cat(sprintf("Significant edges: %d\n", sum(adj_mat_n != 0) / 2))
+cat(sprintf("Network density: %.4f\n", sum(adj_mat_n != 0) / (nrow(adj_mat_n) * (nrow(adj_mat_n) - 1))))
+cat(sprintf("  - Positive correlations: %d\n", sum((adj_mat_n == 1) & (rho.n > 0)) / 2))
+cat(sprintf("  - Negative correlations: %d\n", sum((adj_mat_n == 1) & (rho.n < 0)) / 2))
 ```
 
-### Compute degree for each network
+
+### 3.3 Degree Analysis and Scale-Free Properties
+
+Compute degree centrality for each network.
 
 ```{r}
+# Compute degree for each network
 degree_c <- colSums(adj_mat_c != 0)
 names(degree_c) <- rownames(adj_mat_c)
 degree_c <- sort(degree_c, decreasing = TRUE)
@@ -630,274 +631,685 @@ degree_c <- sort(degree_c, decreasing = TRUE)
 degree_n <- colSums(adj_mat_n != 0)
 names(degree_n) <- rownames(adj_mat_n)
 degree_n <- sort(degree_n, decreasing = TRUE)
+
+# Summary statistics
+cat("=== DEGREE DISTRIBUTION SUMMARY ===\n\n")
+cat("Cancer Network:\n")
+cat(sprintf("  Max degree: %d\n", max(degree_c)))
+cat(sprintf("  Mean degree: %. 2f\n", mean(degree_c)))
+cat(sprintf("  Median degree: %.1f\n", median(degree_c)))
+cat(sprintf("  Nodes with degree > 0: %d (%.1f%%)\n", 
+            sum(degree_c > 0), 100 * sum(degree_c > 0) / length(degree_c)))
+
+cat("\nNormal Network:\n")
+cat(sprintf("  Max degree: %d\n", max(degree_n)))
+cat(sprintf("  Mean degree: %.2f\n", mean(degree_n)))
+cat(sprintf("  Median degree: %.1f\n", median(degree_n)))
+cat(sprintf("  Nodes with degree > 0: %d (%. 1f%%)\n", 
+            sum(degree_n > 0), 100 * sum(degree_n > 0) / length(degree_n)))
 ```
 
-### Check if scale-free network (plot degree distribution)
+#### Scale-Free Network Analysis
 
-Cancer Network degree distribution
+A scale-free network follows a power-law degree distribution. We check this by plotting log-log degree distributions.
 
-```{r}
+```{r fig.width=10, fig.height=4}
+par(mfrow = c(1, 2))
+
+# Cancer Network
 hist(degree_c, breaks = 50, main = "Cancer Network Degree Distribution",
-     xlab = "Degree", col = "lightblue", freq = FALSE)
-```
+     xlab = "Degree", col = "lightcoral", freq = FALSE)
 
-To check scale-free: plot log-log (degree vs frequency)
-
-```{r}
-deg_freq_c <- table(degree_c[degree_c > 0])
-if (length(deg_freq_c) > 1) {
-  plot(log10(as.numeric(names(deg_freq_c))), log10(as.numeric(deg_freq_c)), 
-       main = "Cancer: Log-Log Degree Distribution", xlab = "Degree", ylab = "Frequency", 
-       pch = 16, col = "lightblue", cex = 1.0)
-  fit_c <- lm(log10(as.numeric(deg_freq_c)) ~ log10(as.numeric(names(deg_freq_c))))
-  abline(fit_c, col = "lightcoral", lwd = 2, lty = 2)
-  legend("topright", legend = paste("R² =", round(summary(fit_c)$r.squared, 3)),
-         bty = "n")
-}
-```
-
-Normal Network degree distribution
-
-```{r}
+# Normal Network
 hist(degree_n, breaks = 50, main = "Normal Network Degree Distribution",
      xlab = "Degree", col = "lightgreen", freq = FALSE)
+
+par(mfrow = c(1, 1))
 ```
 
-To check scale-free: plot log-log (degree vs frequency)
+```{r fig.width=10, fig.height=4}
 
-```{r}
+# Function to estimate gamma using zeta free log-likelihood
+estimate_gamma_zeta <- function(deg_freq, kmax = 100000) {
+  # Build vector of observations from frequency table
+  k_values <- as.numeric(names(deg_freq))
+  k_counts <- as.numeric(deg_freq)
+  
+  # Expand into full sample vector
+  k <- rep(k_values, k_counts)
+  
+  # Minimum degree
+  k_min <- min(k)
+  
+  # Free zeta log-likelihood function
+  loglik_zeta_free <- function(gamma, k, k_min, kmax) {
+    if (gamma <= 1) return(-Inf)
+    
+    N <- length(k)
+    M_prime <- sum(log(k))
+    
+    # Normalization constant (truncated zeta)
+    Z <- sum(1 / (k_min:kmax)^gamma)
+    
+    if (!is.finite(Z) || Z <= 0) return(-Inf)
+    
+    # Log-likelihood
+    -gamma * M_prime - N * log(Z)
+  }
+  
+  # MLE fit
+  result <- tryCatch({
+    fit <- optim(
+      par = 2.0,  # Initial gamma
+      fn = function(gamma) -loglik_zeta_free(gamma, k, k_min, kmax),
+      method = "Brent",
+      lower = 1.01,
+      upper = 10
+    )
+    
+    gamma_hat <- fit$par
+    ll <- -fit$value
+    
+    list(gamma = gamma_hat, loglik = ll, success = TRUE)
+  }, error = function(e) {
+    list(gamma = NA, loglik = NA, success = FALSE)
+  })
+  
+  return(result)
+}
+
+par(mfrow = c(1, 2))
+
+# Cancer: Log-Log plot
+deg_freq_c <- table(degree_c[degree_c > 0])
+if (length(deg_freq_c) > 1) {
+  # Estimate gamma using zeta MLE
+  zeta_result_c <- estimate_gamma_zeta(deg_freq_c)
+  gamma_c <- zeta_result_c$gamma
+  
+  # Plot
+  plot(log10(as.numeric(names(deg_freq_c))), log10(as.numeric(deg_freq_c)), 
+       main = "Cancer: Log-Log Degree Distribution", 
+       xlab = "log10(Degree)", ylab = "log10(Frequency)", 
+       pch = 16, col = "lightcoral", cex = 1.2)
+  
+  # Fit line for visualization (using estimated gamma)
+  x_vals <- log10(as.numeric(names(deg_freq_c)))
+  y_vals <- log10(as.numeric(deg_freq_c))
+
+  fit_c <- lm(y_vals ~ x_vals)
+  
+  abline(fit_c, col = "darkred", lwd = 2, lty = 2)
+  
+  legend("topright", 
+         legend = paste("γ (MLE) =", round(gamma_c, 2)),
+         bty = "n", cex = 0.9)
+}
+
+# Normal: Log-Log plot
 deg_freq_n <- table(degree_n[degree_n > 0])
 if (length(deg_freq_n) > 1) {
+  # Estimate gamma using zeta MLE
+  zeta_result_n <- estimate_gamma_zeta(deg_freq_n)
+  gamma_n <- zeta_result_n$gamma
+  ll_n <- zeta_result_n$loglik
+  
+  # Plot
   plot(log10(as.numeric(names(deg_freq_n))), log10(as.numeric(deg_freq_n)), 
-       main = "Normal: Log-Log Degree Distribution", xlab = "Degree", ylab = "Frequency", 
-       pch = 16, col = "lightgreen", cex = 1.0)
-  fit_n <- lm(log10(as.numeric(deg_freq_n)) ~ log10(as.numeric(names(deg_freq_n))))
-  abline(fit_n, col = "lightcoral", lwd = 2, lty = 2)
-  legend("topright", legend = paste("R² =", round(summary(fit_n)$r.squared, 3)),
-         bty = "n")
+       main = "Normal: Log-Log Degree Distribution", 
+       xlab = "log10(Degree)", ylab = "log10(Frequency)", 
+       pch = 16, col = "lightgreen", cex = 1.2)
+  
+  # Fit line for visualization
+  x_vals <- log10(as.numeric(names(deg_freq_n)))
+  y_vals <- log10(as.numeric(deg_freq_n))
+  
+  # Linear regression for R² calculation
+  fit_n <- lm(y_vals ~ x_vals)
+  
+  abline(fit_n, col = "darkgreen", lwd = 2, lty = 2)
+  
+  legend("topright", 
+         legend = paste("γ (MLE) =", round(gamma_n, 2)),
+         bty = "n", cex = 0.9)
+}
+
+par(mfrow = c(1, 1))
+```
+
+
+### 3.4 Hub Identification and Comparison
+
+Identify hubs as the top 5% of nodes with highest degree values.
+
+```{r}
+# Define hub thresholds (top 5% of connected nodes)
+hub_threshold_c <- quantile(degree_c[degree_c > 0], 0.95)
+hub_threshold_n <- quantile(degree_n[degree_n > 0], 0.95)
+
+# Identify hubs
+hubs_c <- degree_c[degree_c >= hub_threshold_c]
+hubs_n <- degree_n[degree_n >= hub_threshold_n]
+
+cat("=== HUB IDENTIFICATION ===\n")
+cat(sprintf("Cancer Network:\n"))
+cat(sprintf("  Hub threshold (95th percentile): degree ≥ %d\n", hub_threshold_c))
+cat(sprintf("  Number of hubs: %d\n", length(hubs_c)))
+
+cat(sprintf("\nNormal Network:\n"))
+cat(sprintf("  Hub threshold (95th percentile): degree ≥ %d\n", hub_threshold_n))
+cat(sprintf("  Number of hubs: %d\n", length(hubs_n)))
+```
+
+#### Hub Comparison Between Conditions
+
+```{r}
+# Compare hub sets
+common_hubs <- intersect(names(hubs_c), names(hubs_n))
+selective_hubs_c <- setdiff(names(hubs_c), names(hubs_n))
+selective_hubs_n <- setdiff(names(hubs_n), names(hubs_c))
+
+cat("=== HUB COMPARISON: CANCER vs NORMAL ===\n")
+cat(sprintf("Common hubs (present in both): %d\n", length(common_hubs)))
+cat(sprintf("Cancer-selective hubs: %d\n", length(selective_hubs_c)))
+cat(sprintf("Normal-selective hubs: %d\n", length(selective_hubs_n)))
+```
+
+
+### 3.5 Gene Symbol Mapping
+
+Map Ensembl IDs to gene symbols for biological interpretation.
+
+```{r}
+# Create gene mapping
+gene_mapping <- genes.info[, c("gene_id", "gene_name")]
+rownames(gene_mapping) <- gene_mapping$gene_id
+
+get_gene_symbol <- function(ensembl_id, mapping = gene_mapping) {
+  if (ensembl_id %in% rownames(mapping)) {
+    symbol <- mapping[ensembl_id, "gene_name"]
+    if (! is.na(symbol) && symbol != "") return(symbol)
+  }
+  return(ensembl_id)
 }
 ```
 
-### Find hubs (top 5% highest degree)
+#### Top 3 Hubs in Each Network
 
 ```{r}
-y <- quantile(degree_n[degree_n>0], 0.95)
-x <- quantile(degree_c[degree_c>0], 0.95)
+# Top 3 Cancer Hubs
+top3_cancer <- head(degree_c[degree_c > 0], 3)
+top3_cancer_symbols <- sapply(names(top3_cancer), get_gene_symbol)
 
-hubs_c <- degree_c[degree_c>=x]
-hubs_n <- degree_n[degree_n>=y]
+cat("=== TOP 3 HUBS: CANCER NETWORK ===\n\n")
+for (i in 1:3) {
+  cat(sprintf("%d. %s (%s) - Degree: %d\n", 
+              i, top3_cancer_symbols[i], names(top3_cancer)[i], top3_cancer[i]))
+}
+
+# Top 3 Normal Hubs
+top3_normal <- head(degree_n[degree_n > 0], 3)
+top3_normal_symbols <- sapply(names(top3_normal), get_gene_symbol)
+
+cat("\n=== TOP 3 HUBS: NORMAL NETWORK ===\n\n")
+for (i in 1:3) {
+  cat(sprintf("%d. %s (%s) - Degree: %d\n", 
+              i, top3_normal_symbols[i], names(top3_normal)[i], top3_normal[i]))
+}
 ```
 
-### Compare hubs between conditions
 
-Common hubs
+### 3.6 Alternative Centrality Analysis (Betweenness)
+
+Compare degree-based hubs with betweenness centrality to identify genes that serve as bridges.
 
 ```{r}
-common_hubs <- intersect(names(hubs_c), names(hubs_n))
+# Convert to igraph objects
+graph_cancer <- graph_from_adjacency_matrix(adj_mat_c, mode = "undirected", diag = FALSE)
+graph_normal <- graph_from_adjacency_matrix(adj_mat_n, mode = "undirected", diag = FALSE)
+
+# Compute betweenness centrality
+betweenness_c <- betweenness(graph_cancer, directed = FALSE, normalized = TRUE)
+betweenness_n <- betweenness(graph_normal, directed = FALSE, normalized = TRUE)
+
+names(betweenness_c) <- V(graph_cancer)$name
+names(betweenness_n) <- V(graph_normal)$name
+
+betweenness_c <- sort(betweenness_c, decreasing = TRUE)
+betweenness_n <- sort(betweenness_n, decreasing = TRUE)
 ```
 
-Hubs unique to cancer
-
 ```{r}
-selective_hubs_c <- setdiff(names(hubs_c), names(hubs_n))
+# Identify top 5% by betweenness
+bc_threshold_c <- quantile(betweenness_c[betweenness_c > 0], 0.95)
+bc_threshold_n <- quantile(betweenness_n[betweenness_n > 0], 0.95)
+
+top_bc_c <- betweenness_c[betweenness_c >= bc_threshold_c]
+top_bc_n <- betweenness_n[betweenness_n >= bc_threshold_n]
+
+# Compare with degree-based hubs
+overlap_c <- intersect(names(top_bc_c), names(hubs_c))
+overlap_n <- intersect(names(top_bc_n), names(hubs_n))
+
+cat("=== DEGREE vs BETWEENNESS CENTRALITY COMPARISON ===\n")
+cat("Cancer Network:\n")
+cat(sprintf("  Degree hubs: %d | Betweenness hubs: %d | Overlap: %d (%.1f%%)\n",
+            length(hubs_c), length(top_bc_c), length(overlap_c),
+            100 * length(overlap_c) / length(union(names(hubs_c), names(top_bc_c)))))
+
+cat("\nNormal Network:\n")
+cat(sprintf("  Degree hubs: %d | Betweenness hubs: %d | Overlap: %d (%.1f%%)\n",
+            length(hubs_n), length(top_bc_n), length(overlap_n),
+            100 * length(overlap_n) / length(union(names(hubs_n), names(top_bc_n)))))
 ```
 
-Hubs unique to normal
+```{r fig.width=10, fig.height=5}
+# Visualization
+library(dplyr)
 
-```{r}
-selective_hubs_n <- setdiff(names(hubs_n), names(hubs_c))
+centrality_cancer_df <- data.frame(
+  Gene = names(degree_c),
+  Degree = as.numeric(degree_c),
+  Betweenness = betweenness_c[names(degree_c)]
+) %>%
+  mutate(Hub_Type = case_when(
+    Gene %in% overlap_c ~ "Both",
+    Gene %in% names(hubs_c) ~ "Degree Only",
+    Gene %in% names(top_bc_c) ~ "Betweenness Only",
+    TRUE ~ "Non-Hub"
+  ))
+
+centrality_normal_df <- data.frame(
+  Gene = names(degree_n),
+  Degree = as.numeric(degree_n),
+  Betweenness = betweenness_n[names(degree_n)]
+) %>%
+  mutate(Hub_Type = case_when(
+    Gene %in% overlap_n ~ "Both",
+    Gene %in% names(hubs_n) ~ "Degree Only",
+    Gene %in% names(top_bc_n) ~ "Betweenness Only",
+    TRUE ~ "Non-Hub"
+  ))
+
+p1 <- ggplot(centrality_cancer_df, aes(x = Degree, y = Betweenness, color = Hub_Type)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_manual(values = c("Both" = "purple", "Degree Only" = "red", 
+                                "Betweenness Only" = "blue", "Non-Hub" = "gray70")) +
+  labs(title = "Cancer Network", x = "Degree", y = "Betweenness") +
+  theme_minimal() + theme(legend.position = "bottom")
+
+p2 <- ggplot(centrality_normal_df, aes(x = Degree, y = Betweenness, color = Hub_Type)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_manual(values = c("Both" = "purple", "Degree Only" = "red", 
+                                "Betweenness Only" = "blue", "Non-Hub" = "gray70")) +
+  labs(title = "Normal Network", x = "Degree", y = "Betweenness") +
+  theme_minimal() + theme(legend.position = "bottom")
+
+gridExtra::grid.arrange(p1, p2, ncol = 2, top = "Degree vs Betweenness Centrality")
 ```
 
-Output
-
 ```{r}
-cat("Number of cancer hubs:", length(hubs_c), "\n")
-cat("Number of normal hubs:", length(hubs_n), "\n")
-cat("Number of common hubs:", length(common_hubs), "\n")
-cat("Number of selective hubs in cancer:", length(selective_hubs_c), "\n")
-cat("Number of selective hubs in normal:", length(selective_hubs_n), "\n")
+# Correlation between centrality measures
+cor_c <- cor(centrality_cancer_df$Degree, centrality_cancer_df$Betweenness, 
+             method = "spearman", use = "complete.obs")
+cor_n <- cor(centrality_normal_df$Degree, centrality_normal_df$Betweenness, 
+             method = "spearman", use = "complete.obs")
+
+cat("=== CENTRALITY CORRELATION ===\n")
+cat(sprintf("Cancer Network (Spearman): %.3f\n", cor_c))
+cat(sprintf("Normal Network (Spearman): %.3f\n", cor_n))
 ```
 
-**Output:**
 
--   **adj_mat_c = adjacency matrix for cancer co-expression network**
+## 4. Differential Co-Expression Network
 
--   **adj_mat_n = adjacency matrix for normal co-expression network**
+### 4.1 Network Computation
 
--   **hubs_c = hubs in cancer network**
-
--   **hubs_n = hubs in normal network**
-
-## 4. Differential Co-expressed Network
-
-Set Z-score threshold
+Compute differential co-expression using Fisher's Z-transform to identify edges with significantly changed correlations.
 
 ```{r}
-z_threshold <- 5 # more restrictive to keep the network sparser
-```
+# Sample sizes
+n_c <- ncol(expr_deg_cancer)
+n_n <- ncol(expr_deg_normal)
 
-Sample sizes
-
-```{r}
-n_c <- ncol(expr_deg_cancer)  # Number of cancer samples
-n_n <- ncol(expr_deg_normal)  # Number of normal samples
-```
-
-### Compute differential adjacency matrix
-
-Function to compute Fisher's Z-transform
-
-```{r}
+# Fisher's Z-transform
 fisher_z <- function(r) {
   0.5 * log((1 + r) / (1 - r))
 }
-```
 
-Compute Z-transforms for cancer and normal correlations
-
-```{r}
 z_c <- fisher_z(rho.c)
 z_n <- fisher_z(rho.n)
-```
 
-Compute Z-score for difference: (z_c - z_n) / sqrt(1/(n_c-3) + 1/(n_n-3))
-
-```{r}
+# Z-score for difference
 se <- sqrt(1/(n_c - 3) + 1/(n_n - 3))
 z_diff <- (z_c - z_n) / se
-```
 
-Binary adjacency
-
-```{r}
-adj_mat_diff <- z_diff
-adj_mat_diff <- adj_mat_diff_bin <- (abs(z_diff) >= z_threshold) * 1
-```
-
-Remove diagonal
-
-```{r}
+# Binary adjacency matrix
+z_threshold <- 5  # |Z| >= 5 for significant differential co-expression
+adj_mat_diff <- (abs(z_diff) >= z_threshold) * 1
 diag(adj_mat_diff) <- 0
+
+cat("=== DIFFERENTIAL NETWORK COMPUTATION ===\n\n")
+cat(sprintf("Z-score threshold: |Z| ≥ %d\n", z_threshold))
+cat(sprintf("Total possible edges: %d\n", nrow(adj_mat_diff) * (nrow(adj_mat_diff) - 1) / 2))
+cat(sprintf("Differential edges: %d\n", sum(adj_mat_diff) / 2))
+cat(sprintf("Network density: %.4f\n", sum(adj_mat_diff) / (nrow(adj_mat_diff) * (nrow(adj_mat_diff) - 1))))
 ```
 
-### Compute degree for differential network
+### 4.2 Degree Analysis and Scale-Free Properties
 
 ```{r}
+# Compute differential degree
 degree_diff <- colSums(adj_mat_diff != 0)
 names(degree_diff) <- rownames(adj_mat_diff)
 degree_diff <- sort(degree_diff, decreasing = TRUE)
+
+cat("=== DIFFERENTIAL NETWORK DEGREE SUMMARY ===\n")
+cat(sprintf("Max degree: %d\n", max(degree_diff)))
+cat(sprintf("Mean degree: %.2f\n", mean(degree_diff)))
+cat(sprintf("Nodes with degree > 0: %d (%.1f%%)\n", 
+            sum(degree_diff > 0), 100 * sum(degree_diff > 0) / length(degree_diff)))
 ```
 
-### Check if scale-free network (plot degree distribution)
+```{r fig.width=10, fig.height=4}
+par(mfrow = c(1, 2))
 
-Differential network degree distribution
-
-```{r}
-hist(degree_diff, breaks = 50, main = "Differential Network Degree Distribution", 
+# Histogram
+hist(degree_diff, breaks = 50, main = "Differential Network Degree Distribution",
      xlab = "Degree", col = "plum", freq = FALSE)
+
+# Log-log plot
+deg_freq_diff <- table(degree_diff[degree_diff > 0])
+if (length(deg_freq_diff) > 1) {
+  # Estimate gamma using zeta MLE (function defined earlier)
+  zeta_result_diff <- estimate_gamma_zeta(deg_freq_diff)
+  gamma_diff <- zeta_result_diff$gamma
+  
+  # Plot
+  plot(log10(as.numeric(names(deg_freq_diff))), log10(as.numeric(deg_freq_diff)), 
+       main = "Differential: Log-Log Degree Distribution", 
+       xlab = "log10(Degree)", ylab = "log10(Frequency)", 
+       pch = 16, col = "plum", cex = 1.2)
+  
+  # Fit line for visualization
+  x_vals <- log10(as.numeric(names(deg_freq_diff)))
+  y_vals <- log10(as.numeric(deg_freq_diff))
+  
+  # Linear regression for R² calculation
+  fit_diff <- lm(y_vals ~ x_vals)
+  
+  abline(fit_diff, col = "purple", lwd = 2, lty = 2)
+  
+  legend("topright", 
+         legend = c(paste("γ (MLE) =", round(gamma_diff, 2))), 
+         bty = "n", cex = 0.9)
+}
+
+par(mfrow = c(1, 1))
+
 ```
 
-Log-log plot
+### 4.3 Hub Identification and Comparison with Co-expression Networks
 
 ```{r}
-deg_freq_diff <- table(degree_diff)
-if (length(deg_freq_diff) > 1) {
-  plot(log(as.numeric(names(deg_freq_diff))), log(deg_freq_diff), 
-       main = "Differential: Log-Log Degree Distribution", xlab = "log(Degree)", ylab = "log(Frequency)", 
-       pch = 16, col = "plum", cex = 0.8) 
+# Identify differential hubs (top 5%)
+hub_threshold_diff <- quantile(degree_diff[degree_diff > 0], 0.95)
+hubs_diff <- degree_diff[degree_diff >= hub_threshold_diff]
+
+cat("=== DIFFERENTIAL HUB IDENTIFICATION ===\n")
+cat(sprintf("Hub threshold (95th percentile): degree ≥ %.2f \n", hub_threshold_diff))
+cat(sprintf("Number of differential hubs: %d \n", length(hubs_diff)))
+```
+
+#### Compare with Task 3 Hubs
+
+```{r}
+# Compare differential hubs with cancer and normal hubs
+common_diff_c <- intersect(names(hubs_diff), names(hubs_c))
+common_diff_n <- intersect(names(hubs_diff), names(hubs_n))
+selective_diff <- setdiff(names(hubs_diff), union(names(hubs_c), names(hubs_n)))
+
+cat("=== COMPARISON: DIFFERENTIAL vs CO-EXPRESSION HUBS ===\n")
+cat(sprintf("Differential hubs also in Cancer network: %d\n", length(common_diff_c)))
+cat(sprintf("Differential hubs also in Normal network: %d\n", length(common_diff_n)))
+cat(sprintf("Differential hubs unique (not hubs in either): %d\n", length(selective_diff)))
+```
+
+
+### 4.4 Top 3 Differential Hubs Analysis
+
+```{r}
+# Top 3 differential hubs
+top3_diff <- head(degree_diff[degree_diff > 0], 3)
+top3_diff_symbols <- sapply(names(top3_diff), get_gene_symbol)
+
+cat("=== TOP 3 HUBS: DIFFERENTIAL NETWORK ===\n")
+for (i in 1:3) {
+  cat(sprintf("%d. %s (%s) - Differential Degree: %d\n", 
+              i, top3_diff_symbols[i], names(top3_diff)[i], top3_diff[i]))
 }
 ```
 
-### Find hubs (top 5% highest degree)
-
 ```{r}
-z <- quantile(degree_diff[degree_diff>0], 0.95)
-hubs_diff <- degree_diff[degree_diff>=z]
+cat("=== DETAILED CONNECTIVITY ANALYSIS ===\n")
+
+top_diff_genes <- names(top3_diff)
+
+for (i in 1:3) {
+  gene <- top_diff_genes[i]
+  symbol <- get_gene_symbol(gene)
+  
+  # Find neighbors in each network
+  neighbors_n <- colnames(adj_mat_n)[adj_mat_n[gene, ] != 0]
+  neighbors_c <- colnames(adj_mat_c)[adj_mat_c[gene, ] != 0]
+  neighbors_diff <- colnames(adj_mat_diff)[adj_mat_diff[gene, ] != 0]
+  
+  # Calculate overlaps
+  preserved <- intersect(neighbors_n, neighbors_c)
+  lost <- setdiff(neighbors_n, neighbors_c)
+  gained <- setdiff(neighbors_c, neighbors_n)
+  
+  # Z-score direction
+  z_vals <- z_diff[gene, neighbors_diff]
+  n_pos_z <- sum(z_vals > 0, na.rm = TRUE)
+  n_neg_z <- sum(z_vals < 0, na.rm = TRUE)
+  
+  cat(sprintf("--- %d. %s ---\n", i, symbol))
+  cat(sprintf("  Normal Degree: %d → Cancer Degree: %d (Change: %+d)\n", 
+              degree_n[gene], degree_c[gene], degree_c[gene] - degree_n[gene]))
+  cat(sprintf("  Differential Degree: %d\n", degree_diff[gene]))
+  cat(sprintf("  Connections preserved: %d | Lost: %d | Gained: %d\n", 
+              length(preserved), length(lost), length(gained)))
+  cat(sprintf("  Edges with ↑ correlation in cancer: %d | ↓ correlation: %d\n", 
+              n_pos_z, n_neg_z))
+}
 ```
 
-### Compare hubs with task 3 (cancer and normal hubs)
+```{r fig.width=8, fig.height=5}
+# Visualization
+plot_data <- data.frame(
+  Gene = rep(comparison_table$Gene_Symbol, 2),
+  Condition = rep(c("Normal", "Cancer"), each = 3),
+  Degree = c(comparison_table$Degree_Normal, comparison_table$Degree_Cancer)
+)
+plot_data$Gene <- factor(plot_data$Gene, levels = comparison_table$Gene_Symbol)
+plot_data$Condition <- factor(plot_data$Condition, levels = c("Normal", "Cancer"))
 
-Common with cancer hubs
-
-```{r}
-common_hubs_diff_c <- intersect(names(hubs_diff), names(hubs_c))
+ggplot(plot_data, aes(x = Gene, y = Degree, fill = Condition)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.8, width = 0.7) +
+  geom_text(aes(label = Degree), position = position_dodge(width = 0.7), vjust = -0.5, size = 3.5) +
+  scale_fill_manual(values = c("Normal" = "#4DAF4A", "Cancer" = "#E41A1C")) +
+  labs(title = "Top 3 Differential Hubs: Degree Comparison",
+       subtitle = "How connectivity changes from Normal to Cancer",
+       x = "Gene Symbol", y = "Degree") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "top",
+        plot.title = element_text(hjust = 0.5, face = "bold"))
 ```
 
-Common with normal hubs
+### 4.5 Hub Transition Analysis
 
 ```{r}
-common_hubs_diff_n <- intersect(names(hubs_diff), names(hubs_n))
+# Full comparison for all differential hubs
+all_diff_hub_genes <- names(hubs_diff)
+
+full_comparison <- data.frame(
+  Gene_Symbol = sapply(all_diff_hub_genes, get_gene_symbol),
+  Ensembl_ID = all_diff_hub_genes,
+  Degree_Normal = degree_n[all_diff_hub_genes],
+  Degree_Cancer = degree_c[all_diff_hub_genes],
+  Degree_Differential = degree_diff[all_diff_hub_genes],
+  Is_Hub_Normal = all_diff_hub_genes %in% names(hubs_n),
+  Is_Hub_Cancer = all_diff_hub_genes %in% names(hubs_c),
+  stringsAsFactors = FALSE
+)
+
+full_comparison$Hub_Transition <- case_when(
+  full_comparison$Is_Hub_Normal & full_comparison$Is_Hub_Cancer ~ "Hub in Both",
+  full_comparison$Is_Hub_Normal & !full_comparison$Is_Hub_Cancer ~ "Lost Hub Status",
+  !full_comparison$Is_Hub_Normal & full_comparison$Is_Hub_Cancer ~ "Gained Hub Status",
+  TRUE ~ "Differential Hub Only"
+)
+
+full_comparison <- full_comparison[order(-full_comparison$Degree_Differential), ]
+
+# Summary
+transition_summary <- table(full_comparison$Hub_Transition)
+cat("=== HUB TRANSITION SUMMARY ===\n")
+print(transition_summary)
 ```
 
-Unique to differential
+
+### 4.6 Signed Differential Network Analysis
+
+Distinguish between edges where correlations increased vs decreased in cancer.
 
 ```{r}
-selective_hubs_diff <- setdiff(names(hubs_diff), union(names(hubs_c), names(hubs_n)))
+# Positive subnetwork (correlations INCREASED in cancer)
+adj_mat_diff_positive <- (z_diff >= z_threshold) * 1
+diag(adj_mat_diff_positive) <- 0
+
+# Negative subnetwork (correlations DECREASED in cancer)
+adj_mat_diff_negative <- (z_diff <= -z_threshold) * 1
+diag(adj_mat_diff_negative) <- 0
+
+cat("=== SIGNED DIFFERENTIAL NETWORK STATISTICS ===\n")
+cat(sprintf("Positive edges (correlation ↑ in cancer): %d\n", sum(adj_mat_diff_positive) / 2))
+cat(sprintf("Negative edges (correlation ↓ in cancer): %d\n", sum(adj_mat_diff_negative) / 2))
+cat(sprintf("Ratio (Positive/Negative): %.2f\n", 
+            sum(adj_mat_diff_positive) / max(sum(adj_mat_diff_negative), 1)))
 ```
 
-Output
-
 ```{r}
-cat("Number of differential hubs:", length(hubs_diff), "\n")
-cat("Number of hubs common with cancer:", length(common_hubs_diff_c), "\n")
-cat("Number of hubs common with normal:", length(common_hubs_diff_n), "\n")
-cat("Number of selective hubs in differential:", length(selective_hubs_diff), "\n")
+# Compute signed degrees
+degree_positive <- colSums(adj_mat_diff_positive)
+names(degree_positive) <- rownames(adj_mat_diff_positive)
+degree_positive <- sort(degree_positive, decreasing = TRUE)
+
+degree_negative <- colSums(adj_mat_diff_negative)
+names(degree_negative) <- rownames(adj_mat_diff_negative)
+degree_negative <- sort(degree_negative, decreasing = TRUE)
+
+# Identify signed hubs
+pos_threshold <- quantile(degree_positive[degree_positive > 0], 0.95)
+neg_threshold <- quantile(degree_negative[degree_negative > 0], 0.95)
+
+hubs_positive <- degree_positive[degree_positive >= pos_threshold & degree_positive > 0]
+hubs_negative <- degree_negative[degree_negative >= neg_threshold & degree_negative > 0]
+
+cat("=== SIGNED HUBS ===\n")
+cat(sprintf("Positive hubs (correlations ↑ in cancer): %d\n", length(hubs_positive)))
+cat(sprintf("Negative hubs (correlations ↓ in cancer): %d\n", length(hubs_negative)))
 ```
 
-### Subnetwork Plot of the Most Relevant Gene (Highest Degree in Differential Network)
-
-Find the gene with the highest degree in the differential network
+#### Top 3 Positive and Negative Hubs
 
 ```{r}
-top_gene <- names(degree_diff)[1]  # Highest degree
-top_gene_degree <- degree_diff[1]
+# Top positive hubs
+top3_pos <- head(hubs_positive, 3)
+top3_pos_symbols <- sapply(names(top3_pos), get_gene_symbol)
 
-cat("Most relevant gene:", top_gene, "with degree:", top_gene_degree, "\n")
+cat("=== TOP 3 POSITIVE HUBS ===\n")
+cat("(Genes whose correlations INCREASED in cancer)\n")
+for (i in seq_along(top3_pos)) {
+  cat(sprintf("%d.  %s - Positive Degree: %d\n", i, top3_pos_symbols[i], top3_pos[i]))
+}
+
+# Top negative hubs
+top3_neg <- head(hubs_negative, 3)
+top3_neg_symbols <- sapply(names(top3_neg), get_gene_symbol)
+
+cat("\n=== TOP 3 NEGATIVE HUBS ===\n")
+cat("(Genes whose correlations DECREASED in cancer)\n")
+for (i in seq_along(top3_neg)) {
+  cat(sprintf("%d. %s - Negative Degree: %d\n", i, top3_neg_symbols[i], top3_neg[i]))
+}
 ```
 
-Find neighbors: genes connected to top_gene in adj_mat_diff
+```{r fig.width=9, fig.height=6}
+# Visualization: Positive vs Negative degree
+all_genes_signed <- data.frame(
+  Gene = names(degree_positive),
+  Positive_Degree = as.numeric(degree_positive),
+  Negative_Degree = as.numeric(degree_negative[names(degree_positive)])
+) %>%
+  mutate(Type = case_when(
+    Gene %in% names(hubs_positive) & Gene %in% names(hubs_negative) ~ "Both Hubs",
+    Gene %in% names(hubs_positive) ~ "Positive Hub",
+    Gene %in% names(hubs_negative) ~ "Negative Hub",
+    TRUE ~ "Non-Hub"
+  ))
 
-```{r}
+ggplot(all_genes_signed, aes(x = Positive_Degree, y = Negative_Degree, color = Type)) +
+  geom_point(alpha = 0.6, size = 2) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+  scale_color_manual(values = c("Both Hubs" = "purple", "Positive Hub" = "#E41A1C", 
+                                "Negative Hub" = "#377EB8", "Non-Hub" = "gray70")) +
+  labs(title = "Signed Differential Network: Positive vs Negative Degree",
+       subtitle = "Above diagonal: more connections decreased | Below: more increased",
+       x = "Positive Degree (correlations ↑ in cancer)",
+       y = "Negative Degree (correlations ↓ in cancer)") +
+  theme_minimal() +
+  theme(legend.position = "right", plot.title = element_text(hjust = 0.5, face = "bold"))
+```
+
+### 4.7 Subnetwork Visualization
+
+#### Top Differential Hub Subnetwork
+
+```{r fig.width=10, fig.height=8}
+top_gene <- names(degree_diff)[1]
+top_gene_symbol <- get_gene_symbol(top_gene)
+
+# Find neighbors
 neighbors <- which(adj_mat_diff[top_gene, ] != 0)
 neighbor_names <- colnames(adj_mat_diff)[neighbors]
-```
 
-Subset: top_gene and its neighbors
-
-```{r}
+# Subset network
 subnet_nodes <- unique(c(top_gene, neighbor_names))
 subnet_adj <- adj_mat_diff[subnet_nodes, subnet_nodes]
+
+# Create network object
+net_subnet <- network(subnet_adj, matrix.type = "adjacency", 
+                      ignore.eval = FALSE, names.eval = "weights", directed = FALSE)
+
+# Set attributes
+net_subnet %v% "type" <- ifelse(network.vertex.names(net_subnet) == top_gene, "hub", "neighbor")
+net_subnet %v% "color" <- ifelse(net_subnet %v% "type" == "hub", "red", "steelblue")
+
+# Labels
+node_labels <- sapply(network.vertex.names(net_subnet), get_gene_symbol)
+
+ggnet2(net_subnet, color = "color", alpha = 0.8, size = 4,
+       edge.color = "gray60", edge.alpha = 0.5, edge.size = 0.3,
+       label = node_labels, label.size = 2.5, label.color = "black") +
+  ggtitle(paste("Subnetwork of", top_gene_symbol, 
+                "(Top Differential Hub, Degree:", degree_diff[top_gene], ")")) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
 ```
 
-Create network object
 
-```{r}
-net_subnet <- network(subnet_adj, matrix.type = "adjacency", ignore.eval = FALSE, names.eval = "weights", directed = FALSE)
-```
-
-Set attributes for plotting
-
-```{r}
-net_subnet %v% "type" <- ifelse(network.vertex.names(net_subnet) == top_gene, "top_gene", "neighbor")
-net_subnet %v% "color" <- ifelse(net_subnet %v% "type" == "top_gene", "red", "blue")
-network::set.edge.attribute(net_subnet, "edgecolor", "green") 
-```
-
-Plot subnetwork
-
-```{r}
-ggnet2(net_subnet, color = "color", alpha = 0.7, size = 3,
-       edge.color = "edgecolor", edge.alpha = 1, edge.size = 0.5,
-       node.label = NULL, label.color = "black", label.size = 4) +
-  ggtitle(paste("Subnetwork of", top_gene, "(Highest Degree in Differential Network)")) +
-  guides(size = "none")
-```
-
-**Output:**
-
--   **adj_mat_diff = adjacency matrix for differential co-expression network**
-
--   **hubs_diff = hubs in differential network**
 
 ## 5. Patient Similarity Network (PSN)
 
