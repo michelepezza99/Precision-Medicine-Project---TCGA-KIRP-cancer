@@ -1,7 +1,11 @@
 ---
 title: "DEPM Project"
 subtitle: "by Domenico Azzarito, Federico Lattanzio and Michele Pezza"
-output: html_notebook
+output:
+  pdf_document:
+    latex_engine: xelatex
+  html_document:
+    df_print: paged
 ---
 
 **Project Steps:**
@@ -263,8 +267,11 @@ Subset both matrices to the same set of patients
 expr.C <- expr.C[, common_ids, drop = FALSE] 
 expr.N <- expr.N[, common_ids, drop = FALSE]
 ```
+
 #### Remove genes with zero counts in ANY sample
+
 We remove genes that have zero counts in at least one sample (tumor or normal) since they do not provide useful information for differential expression analysis and we aim to avoid mathematical issues during log fold change calculations.
+
 ```{r}
 nonzero_genes <- rowSums(expr.C == 0) == 0 & rowSums(expr.N == 0) == 0
 
@@ -434,6 +441,7 @@ ncol(filtr.expr.c)   # should be 32
 sizeFactors(dds)
 
 ```
+
 ```{r}
 summary(sizeFactors(dds))
 ```
@@ -617,7 +625,6 @@ cat(sprintf("  - Positive correlations: %d\n", sum((adj_mat_n == 1) & (rho.n > 0
 cat(sprintf("  - Negative correlations: %d\n", sum((adj_mat_n == 1) & (rho.n < 0)) / 2))
 ```
 
-
 ### 3.3 Degree Analysis and Scale-Free Properties
 
 Compute degree centrality for each network.
@@ -777,7 +784,6 @@ if (length(deg_freq_n) > 1) {
 par(mfrow = c(1, 1))
 ```
 
-
 ### 3.4 Hub Identification and Comparison
 
 Identify hubs as the top 5% of nodes with highest degree values.
@@ -814,7 +820,6 @@ cat(sprintf("Common hubs (present in both): %d\n", length(common_hubs)))
 cat(sprintf("Cancer-selective hubs: %d\n", length(selective_hubs_c)))
 cat(sprintf("Normal-selective hubs: %d\n", length(selective_hubs_n)))
 ```
-
 
 ### 3.5 Gene Symbol Mapping
 
@@ -857,7 +862,6 @@ for (i in 1:3) {
               i, top3_normal_symbols[i], names(top3_normal)[i], top3_normal[i]))
 }
 ```
-
 
 ### 3.6 Alternative Centrality Analysis (Betweenness)
 
@@ -959,7 +963,6 @@ cat("=== CENTRALITY CORRELATION ===\n")
 cat(sprintf("Cancer Network (Spearman): %.3f\n", cor_c))
 cat(sprintf("Normal Network (Spearman): %.3f\n", cor_n))
 ```
-
 
 ## 4. Differential Co-Expression Network
 
@@ -1075,7 +1078,6 @@ cat(sprintf("Differential hubs also in Normal network: %d\n", length(common_diff
 cat(sprintf("Differential hubs unique (not hubs in either): %d\n", length(selective_diff)))
 ```
 
-
 ### 4.4 Top 3 Differential Hubs Analysis
 
 ```{r}
@@ -1179,7 +1181,6 @@ transition_summary <- table(full_comparison$Hub_Transition)
 cat("=== HUB TRANSITION SUMMARY ===\n")
 print(transition_summary)
 ```
-
 
 ### 4.6 Signed Differential Network Analysis
 
@@ -1308,8 +1309,6 @@ ggnet2(net_subnet, color = "color", alpha = 0.8, size = 4,
                 "(Top Differential Hub, Degree:", degree_diff[top_gene], ")")) +
   theme(plot.title = element_text(hjust = 0.5, face = "bold"))
 ```
-
-
 
 ## 5. Patient Similarity Network (PSN)
 
@@ -2009,3 +2008,238 @@ head(master_table, 10)
 summary(master_table)
 
 ```
+
+## 3(opt). Gene Set Enrichment Analysis (cancer hubs)
+
+### Load required libraries
+
+```{r message=FALSE}
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(enrichplot) # Useful for advanced visualizations
+library(pathview)   # For visualizing colorful pathways
+library(stringr)
+```
+
+### Prepare Data for Gene Ontology (GO)
+
+We extract the gene symbols from the hubs identified in **Task 3**. We will compare "Cancer Hubs" (`hubs_c`) against "Normal Hubs" (`hubs_n`) to see the functional differences.
+
+```{r}
+genes_cancer <- names(hubs_c)
+genes_normal <- names(hubs_n)
+```
+
+```{r}
+head(genes_cancer)
+head(genes_normal)
+```
+
+Remove the version suffix from the end of the IDs
+
+```{r}
+# gsub replaces the "\\..*" patter (the dot and all the rest) with ""
+genes_cancer <- gsub("\\..*", "", genes_cancer)
+genes_normal <- gsub("\\..*", "", genes_normal)
+```
+
+Let's see the type of the ID of the genes
+
+```{r}
+# Check of the the first gene to know its format
+first_gene <- genes_cancer[1]
+input_type <- ifelse(startsWith(first_gene, "ENSG"), "ENSEMBL", "SYMBOL")
+
+cat("Clean ID:", genes_cancer[1], "\n")
+cat("The genes appear to be in the format:", input_type, "\n")
+```
+
+Let's convert them in the **ENTREZ ID** format (better supported also for the KEGG later..)
+
+```{r}
+# Cancer Genes
+entrez_cancer <- bitr(genes_cancer, 
+                      fromType = input_type, 
+                      toType = "ENTREZID", 
+                      OrgDb = "org.Hs.eg.db")$ENTREZID
+
+# Normal Genes
+entrez_normal <- bitr(genes_normal, 
+                      fromType = input_type, 
+                      toType = "ENTREZID", 
+                      OrgDb = "org.Hs.eg.db")$ENTREZID
+```
+
+Create a list for the compareCluster function
+
+```{r}
+hubs_list_entrez <- list(Cancer = entrez_cancer, Normal = entrez_normal)
+```
+
+Quick check
+
+```{r}
+head(hubs_list_entrez$Cancer)
+head(hubs_list_entrez$Normal)
+```
+
+### Gene Ontology Enrichment (Biological Process)
+
+We use `compareCluster` to perform GO enrichment for Biological Processes (`ont="BP"`). This allows us to visualize parallel functionalities between cancer and normal tissue hubs.
+
+```{r}
+# GO Analysis
+comp_GO_BP <- compareCluster(geneCluster = hubs_list_entrez, 
+                             fun = "enrichGO",
+                             OrgDb = "org.Hs.eg.db",
+                             keyType = "ENTREZID",
+                             ont = "BP", 
+                             pvalueCutoff = 0.05, 
+                             pAdjustMethod = "BH",
+                             readable = TRUE)
+```
+
+#### Plot
+
+Visualize results with a DotPlot to see which biological processes the genes belong to
+
+```{r}
+# Simplify to reduce redundancy
+comp_clean <- simplify(comp_GO_BP, cutoff = 0.6, by = "p.adjust", select_fun = min)
+
+# Remove duplicate descriptions
+comp_clean@compareClusterResult <- comp_clean@compareClusterResult[!duplicated(comp_clean@compareClusterResult$Description), ]
+
+# Create readable plot
+dotplot(comp_clean, 
+      showCategory = 8, 
+      title = "GO Enrichment: Biological Processes") +
+
+scale_y_discrete(labels = function(x) str_wrap(x, width = 70)) + # Wrap text at 70 characters
+
+theme(
+  plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+  axis.text.y = element_text(size = 9, hjust = 1),  # Increase size slightly
+  axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+  plot.margin = margin(5, 5, 5, 5, "pt"))
+
+```
+
+Right column, Normal tissue: healthy tissue hubs are genes that maintain the physiological functionality of the kidney. The kidney serves to filter the blood and manage nutrients/salts; healthy hub genes do exactly that.
+
+Left column, Cancer tissue: Instead, cancer hubs are predominantly enriched in processes related to immune response and inflammation. This suggests that the tumor microenvironment is characterized by a strong infiltration of immune cells and a chronic inflammatory state, which is a known feature of Papillary Renal Cell Carcinoma.
+
+### KEGG Pathway Enrichment
+
+```{r}
+comp_KEGG <- compareCluster(geneCluster = hubs_list_entrez, 
+                              fun = "enrichKEGG",
+                              organism = "hsa",   # homo sapiens
+                              pvalueCutoff = 0.05)
+```
+
+#### Plot
+
+Plot to see which metabolic pathways the genes belong to
+
+```{r}
+dotplot(comp_KEGG, 
+            showCategory = 10, 
+            title = "KEGG Pathway Enrichment (Hubs)") +
+      
+      # Manda a capo i nomi dei pathway lunghi
+      scale_y_discrete(labels = function(x) str_wrap(x, width = 50)) +
+      
+      theme(
+        plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+        axis.text.y = element_text(size = 9), 
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        plot.margin = margin(10, 10, 10, 10)
+      )
+```
+
+24/38 Cancer Genes and 19/27 Normal Genes were successfully mapped
+
+Right column, Normal tissue: the related pathways confirm the metabolic nature of the healthy kidney. The kidney not only serves to filter, but actively reabsorbs proteins and sugars from the filtrate so as not to lose them in the urine. Normal hubs maintain this metabolic homeostasis.
+
+Left column, Cancer tissue: conversely, the cancer network reveals a radical functional shift towards immune modulation and tissue remodeling. Dominant pathways like *Osteoclast differentiation* and *B cell receptor signaling* indicate a highly inflamed microenvironment. Cancer hubs no longer support filtration but rather drive structural changes and recruit immune cells to sustain tumor progression.
+
+### Pathway Visualization
+
+#### Data Preparation
+
+We recover the log2fc calculated in Task 2
+
+```{r}
+gene_data_fc <- log2fc
+```
+
+Remove the version suffix from the end of the IDs (same as before)
+
+```{r}
+gene_names_clean <- gsub("\\..*", "", names(gene_data_fc))
+```
+
+Let's convert them in the **ENTREZ ID** format
+
+```{r}
+mapping_entrez <- bitr(gene_names_clean, 
+                       fromType = input_type, # "SYMBOL" o "ENSEMBL" (computed before)
+                       toType = "ENTREZID", 
+                       OrgDb = "org.Hs.eg.db")
+```
+
+Create a final vector: VALUES = Log2FC, NAMES= EntrezID
+
+```{r}
+# We need to align the data: we only keep the genes that have been successfully converted
+idx_mapped <- match(gene_names_clean, mapping_entrez[, input_type])
+gene_data_entrez <- gene_data_fc[!is.na(idx_mapped)]
+names(gene_data_entrez) <- mapping_entrez$ENTREZID[na.omit(idx_mapped)]
+```
+
+#### Pathway selection
+
+```{r}
+# We automatically search for the most significant pathway for the "Cancer" cluster
+# if comp_KEGG has results:
+if (!is.null(comp_KEGG) && nrow(comp_KEGG@compareClusterResult) > 0) {
+  res_df <- as.data.frame(comp_KEGG)
+  
+  # we filter for the Cancer cluster
+  top_cancer_pathway <- subset(res_df, Cluster == "Cancer")
+  
+  if (nrow(top_cancer_pathway) > 0) {
+    # take the ID of the first pathway (es. hsa04060)
+    path_id <- top_cancer_pathway$ID[1]
+    path_name <- top_cancer_pathway$Description[1]
+    
+    cat("Map generation for the pathway:", path_name, "(", path_id, ")\n")
+    
+    # PATHVIEW EXECUTION
+    pv.out <- pathview(gene.data = gene_data_entrez, 
+                       pathway.id = path_id, 
+                       species = "hsa", 
+                       out.suffix = "cancer_hubs", # adds this name to the file
+                       keys.align = "y", 
+                       keb.dir = ".",      # saves the image in the current directory
+                       limit = list(gene = 2, cpd = 1), # Color scale: from -2 (Blue) to +2 (Red)
+                       low = list(gene = "blue"), 
+                       mid = list(gene = "gray"), 
+                       high = list(gene = "red"))
+    
+    cat("Image saved as:", paste0(path_id, ".cancer_hubs.png"), "\n")
+    
+  } else {
+    cat("No cancer-specific pathways found in KEGG results.\n")
+  }
+}
+```
+
+#### Plot
+
+Below there's an image because this library saves the plot as image within the main directory
+
+![](images/clipboard-3206778324.png)
+
+Key receptors such as **c-Fms** and inflammatory mediators like **NFkB** are upregulated (red nodes), indicating active signaling cascades. Most notably, downstream osteoclast-specific marker genes, including **CTSK** (Cathepsin K) and **TRAP**, show strong upregulation. This suggests that the tumor microenvironment mimics osteoclastogenic activity, potentially facilitating tissue remodeling or indicating a predisposition for bone metastasis, a known complication of renal cell carcinoma.
