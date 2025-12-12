@@ -51,6 +51,8 @@ library(cowplot)
 library(SNFtool)
 library(reshape2)
 library(poweRlaw)
+library(dplyr)
+library(ggraph)
 # sessionInfo()
 ```
 
@@ -78,7 +80,7 @@ rna.query.C <- TCGAbiolinks::GDCquery(
 Download the data from GDC to local cache folder "GDCdata" a
 
 ```{r message=FALSE}
-#GDCdownload(query = rna.query.C, directory = "GDCdata", method = "api")
+GDCdownload(query = rna.query.C, directory = "GDCdata", method = "api")
 ```
 
 Convert the downloaded files into a SummarizedExperiment object
@@ -125,7 +127,7 @@ rna.query.N <- TCGAbiolinks::GDCquery(
 Download normal data
 
 ```{r message=FALSE}
-##GDCdownload(query = rna.query.N, directory = "GDCdata", method = "api")
+GDCdownload(query = rna.query.N, directory = "GDCdata", method = "api")
 ```
 
 Prepare SummarizedExperiment for normal samples
@@ -1421,8 +1423,7 @@ for (i in seq_along(top3_neg)) {
 
 #### Data preparation
 
-We construct the Patient Similarity Network using normalized and log-transformed tumor expression data restricted to the DEGs.
-Raw counts are not used, as highly expressed genes would dominate similarity estimates.
+We construct the Patient Similarity Network using normalized and log-transformed tumor expression data restricted to the DEGs. Raw counts are not used, as highly expressed genes would dominate similarity estimates.
 
 ```{r}
 
@@ -1462,7 +1463,7 @@ dim(psn_full)
 
 ```
 
-
+### b. Community detection
 
 ```{r}
 # Build graph from FULL similarity matrix
@@ -1552,10 +1553,7 @@ ggnet2(net_obj,
 
 ```
 
-
-
-
-## 5. PSN USING NORMAL GENE EXPRESSION
+### 4(opt). PSN and Community detection using Normal Gene Expression
 
 Data preparation
 
@@ -1648,8 +1646,6 @@ net_normal %v% "community" <-
 
 ```
 
-
-
 ```{r}
 set.seed(77)
 n_comm_norm <- length(unique(net_normal %v% "community"))
@@ -1672,7 +1668,6 @@ ggnet2(net_normal,
   ggtitle("Patient Similarity Network — NORMAL (Full PSN, thresholded for visualization)")
 
 ```
-
 
 Comparison between Tumor and Normal PSNs
 
@@ -1708,8 +1703,6 @@ ggplot(melt_norm, aes(x = Normal_Group, y = Cancer_Group, fill = Count)) +
   base_theme
 ```
 
-## 5. Patient Similarity Network (PSN)
-
 ### c. Similarity Network Fusion
 
 #### Download & Processing of Mutation Data
@@ -1728,7 +1721,7 @@ query_mut <- TCGAbiolinks::GDCquery(
 Actual download **run only once**
 
 ```{r message=FALSE}
-##GDCdownload(query = query_mut, directory = "GDCdata", method = "api")
+GDCdownload(query = query_mut, directory = "GDCdata", method = "api")
 ```
 
 Convert the downloaded files into a SummarizedExperiment object
@@ -2008,20 +2001,6 @@ ggplot(melted_cmat, aes(x = SNF_Group, y = RNA_Group, fill = Count)) +
 
 ```
 
-## PSN Communities Characterization (Clinical & Survival)
-
-Stage 1 merges biological, clinical, and network-based information into a single patient-level table that will allow us to understand what defines each community and whether communities differ in survival or mutation patterns.
-
-## 6. Clinical Data Integration
-
-### Load libraries
-
-
-
-
-
-
-
 ## 3(opt). Gene Set Enrichment Analysis (cancer hubs)
 
 ### Load required libraries
@@ -2257,7 +2236,7 @@ Below there's an image because this library saves the plot as image within the m
 
 This pathway indicates a shift towards chronic inflammation and tissue remodeling. Key components of the classical complement pathway, including the initiator **C1q** and the central hub **C3**, are upregulated (red nodes). Crucially, the strong upregulation of receptors such as **C5aR1**, **C3AR1**, and the integrin receptors **CR3/CR4** suggests active signaling for immune cell recruitment (chemotaxis) and adhesion, rather than direct cell lysis (as the terminal MAC complex remains downregulated). Furthermore, the upregulation of **uPAR** (PLAUR) and coagulation factors like **F10** and **F12** highlights a mechanism for extracellular matrix degradation and a pro-thrombotic state, facilitating tumor spreading and metastasis.
 
-# PSN communities characterization
+## 5(opt). PSN communities characterization
 
 To address PSN community characterization in a statistically meaningful way, we adopted a tumor-only strategy, using all available primary tumor samples and retaining one tumor sample per patient. This choice allows us to substantially increase the number of patients included in the analysis, overcoming the severe sample size limitation that arises when restricting the cohort to paired tumor–normal samples only.
 
@@ -2292,6 +2271,7 @@ cat("Tumor-only cohort (genes x patients):",
     nrow(expr.C_all), "x", ncol(expr.C_all), "\n")
 
 ```
+
 ```{r}
 ###############################################################################
 #  Tumor-only normalization 
@@ -2313,10 +2293,6 @@ cat("Tumor-only normalized matrix:",
 
 ```
 
-
-
-
-
 ```{r message=FALSE}
 
 library(survival)
@@ -2328,7 +2304,6 @@ library(dplyr)
 library(tidyr)
 ```
 
-
 ```{r, results='hide'}
 query_clin <- GDCquery(
   project = proj,
@@ -2338,7 +2313,7 @@ query_clin <- GDCquery(
 )
 
 # Only run once (then comment)
-##GDCdownload(query = query_clin)
+GDCdownload(query = query_clin)
 
 clinical_kirp <- GDCprepare_clinic(query_clin, clinical.info = "patient")
 
@@ -2364,8 +2339,6 @@ clinical_kirp <- clinical_kirp %>%
 
 head(clinical_kirp)
 ```
-
-
 
 ```{r}
 
@@ -2421,9 +2394,6 @@ clinical_kirp <- clinical_kirp %>%
   filter(!is.na(survival_time), !is.na(survival_status))
 ```
 
-
-
-
 ```{r}
 ###############################################################################
 # Alignment checks (RNA vs mutation vs clinical)
@@ -2443,6 +2413,7 @@ cat("RNA ∩ Clinical:",
     length(intersect(patients_rna, patients_clin)), "\n")
 
 ```
+
 ```{r}
 ###############################################################################
 #  DEG panel availability in tumor-only cohort
@@ -2470,6 +2441,7 @@ cat("Final PSN feature matrix:",
 
 
 ```
+
 ```{r}
 
 
@@ -2492,6 +2464,7 @@ cat("Full PSN:", dim(psn_full), "\n")
 
 
 ```
+
 ```{r}
 ###############################################################################
 # Louvain on FULL PSN
@@ -2517,6 +2490,7 @@ cat("Number of PSN communities:",
 
 
 ```
+
 ```{r}
 ###############################################################################
 # PSN for visualization ONLY
@@ -2531,6 +2505,7 @@ diag(psn_plot) <- 0
 cat("Edges for plot:", sum(psn_plot > 0) / 2, "\n")
 
 ```
+
 ```{r}
 ###############################################################################
 # Network object for ggnet2
@@ -2550,6 +2525,7 @@ net_psn_all %v% "community" <-
 
 
 ```
+
 ```{r}
 ###############################################################################
 # Plot
@@ -2574,6 +2550,7 @@ ggnet2(net_psn_all,
 
 
 ```
+
 ```{r}
 ###############################################################################
 # Patient alignment (RNA vs Mutation)
@@ -2589,6 +2566,7 @@ cat("Patients Mutation:", length(patients_mut), "\n")
 cat("Common patients for SNF:", length(common_patients_all), "\n")
 
 ```
+
 ```{r}
 ###############################################################################
 # Prepare SNF input matrices
@@ -2607,6 +2585,7 @@ cat("RNA view:", dim(data_expression_all), "\n")
 cat("Mutation view:", dim(data_mutation_all), "\n")
 
 ```
+
 ```{r}
 ###############################################################################
 # RNA affinity matrix
@@ -2635,6 +2614,7 @@ W_mut_all <- affinityMatrix(dist_mut_all, K, alpha)
 
 
 ```
+
 ```{r}
 ###############################################################################
 # Network fusion
@@ -2656,6 +2636,7 @@ diag(W_fused_all) <- 0
 W_fused_all[W_fused_all < 0] <- 0
 
 ```
+
 ```{r}
 graph_snf_all <- graph_from_adjacency_matrix(
   W_fused_all,
@@ -2675,6 +2656,7 @@ comm_res_snf_all <- data.frame(
 cat("Number of SNF communities:",
     length(unique(comm_res_snf_all$community_snf)), "\n")
 ```
+
 ```{r}
 net_snf_all <- network(
   W_fused_all,
@@ -2690,6 +2672,7 @@ net_snf_all %v% "community" <-
     match(net_names, comm_res_snf_all$patient)
   ]
 ```
+
 ```{r}
 ###############################################################################
 # Standardize patient IDs (12 chars) + deduplicate
@@ -2720,6 +2703,7 @@ cat("SNF clusters:", length(unique(master_table_all$cluster_snf)), "\n")
 summary(master_table_all[, c("survival_time","survival_status")])
 
 ```
+
 ```{r}
 ###############################################################################
 # Survival: Kaplan–Meier by SNF cluster
@@ -2752,6 +2736,7 @@ ggsurvplot(
   ggtheme = theme_classic(base_size = 15)
 )
 ```
+
 ```{r}
 ###############################################################################
 # Helper functions for enrichment tests
@@ -2865,6 +2850,7 @@ if ("gender" %in% colnames(master_table_all)) {
 }
 
 ```
+
 ```{r}
 ###############################################################################
 # Prepare expression + metadata for community DE
@@ -2889,7 +2875,6 @@ cat("Patients for community DE:", ncol(expr_comm), "\n")
 table(meta_comm$community_snf)
 
 ```
-
 
 ```{r}
 ###############################################################################
@@ -2939,6 +2924,7 @@ fit2 <- eBayes(fit2)
 
 
 ```
+
 ```{r}
 ###############################################################################
 # Extract community-specific DEGs 
@@ -3020,8 +3006,6 @@ sapply(community_entrez, length)
 length(universe_entrez)
 
 ```
-
-
 
 ```{r}
 go_results <- compareCluster(
