@@ -117,7 +117,7 @@ rna.query.N <- TCGAbiolinks::GDCquery(
 Download normal data
 
 ```{r message=FALSE}
-GDCdownload(query = rna.query.N, directory = "GDCdata", method = "api")
+#GDCdownload(query = rna.query.N, directory = "GDCdata", method = "api")
 ```
 
 Prepare SummarizedExperiment for normal samples
@@ -1127,8 +1127,27 @@ for (i in 1:3) {
 }
 ```
 
+Create Comparison Table for Top 3 Differential Hubs
+
+```{r}
+# Identify the Top 3 genes from the Differential Network
+top_diff_genes <- names(top3_diff)
+
+# Build the comparison dataframe
+comparison_table <- data.frame(
+  Gene_Symbol = sapply(top_diff_genes, get_gene_symbol), # Convert Ensembl ID to Symbol
+  Ensembl_ID = top_diff_genes,
+  Degree_Normal = degree_n[top_diff_genes],              # Degree in Normal Network
+  Degree_Cancer = degree_c[top_diff_genes],              # Degree in Cancer Network
+  Degree_Differential = degree_diff[top_diff_genes]      # Degree in Differential Network
+)
+
+print(comparison_table) # Top 3 Differential Hubs
+```
+
+Visualization
+
 ```{r fig.width=8, fig.height=5}
-# Visualization
 plot_data <- data.frame(
   Gene = rep(comparison_table$Gene_Symbol, 2),
   Condition = rep(c("Normal", "Cancer"), each = 3),
@@ -1353,6 +1372,13 @@ We're only interested in positive correlations
 patient_sim_matrix[patient_sim_matrix<0] <- 0
 ```
 
+We also apply a threshold to keep only the most significant edges
+
+```{r}
+threshold_plot <- 0.7 
+patient_sim_matrix[patient_sim_matrix < threshold_plot] <- 0
+```
+
 #### Create the network object
 
 ```{r}
@@ -1414,19 +1440,10 @@ comm_res <- data.frame(
 
 #### Network Preparation for Plotting
 
-Filter the matrix by applying a threshold to keep only the strongest conenctions
+Create the network object
 
 ```{r}
-l_comp <- patient_sim_matrix
-
-# Apply a threshold
-threshold_plot <- 0.7 
-l_comp[abs(l_comp) < threshold_plot] <- 0
-diag(l_comp) <- 0
-```
-
-```{r}
-net_final <- network(l_comp, 
+net_final <- network(patient_sim_matrix, 
                      matrix.type = "adjacency", 
                      ignore.eval = FALSE, 
                      names.eval = "weights", 
@@ -1478,7 +1495,7 @@ Data preparation
 ```{r}
 target_data_normal <- as.matrix(expr_deg_normal)   # DEGs × Patients (normal samples)
 
-cat("Dimensioni matrice NORMAL (DEGs x Patients):\n")
+cat("Dimension NORMAL matrix (DEGs x Patients):\n")
 print(dim(target_data_normal))
 ```
 
@@ -1492,6 +1509,13 @@ diag(psn_normal_matrix) <- 0
 
 # Consider only positive correlations
 psn_normal_matrix[psn_normal_matrix < 0] <- 0
+```
+
+As before, we also apply a threshold to keep only the most significant edges
+
+```{r}
+threshold_plot <- 0.7 
+psn_normal_matrix[psn_normal_matrix < threshold_plot] <- 0
 ```
 
 Create the network object
@@ -1510,7 +1534,6 @@ cat("NORMAL PSN — Nodes:", vcount(psn_graph_normal),
 Community detection with Louvain
 
 ```{r}
-
 louvain_normal <- cluster_louvain(psn_graph_normal)
 
 comm_res_normal <- data.frame(
@@ -1526,13 +1549,7 @@ cat("Number of communities (NORMAL):",
 Preparation for plotting
 
 ```{r}
-
-plot_threshold <- 0.7
-psn_plot_mat <- psn_normal_matrix
-psn_plot_mat[psn_plot_mat < plot_threshold] <- 0
-
-
-net_normal <- network(psn_plot_mat,
+net_normal <- network(psn_normal_matrix,
                       matrix.type = "adjacency",
                       ignore.eval = FALSE,
                       names.eval = "weights",
@@ -1628,7 +1645,7 @@ Reading with maftools
 maf_obj <- read.maf(maf = mut_data_prepared)
 ```
 
-Create the bianry matrix (Patients x Genes)
+Create the binary matrix (Patients x Genes)
 
 ```{r}
 mut_count_matrix <- mutCountMatrix(maf_obj) # matrix with the count of the mutations
@@ -1740,6 +1757,19 @@ rownames(W_fused) <- common_patients
 colnames(W_fused) <- common_patients
 ```
 
+Same preprocessing as before
+
+```{r}
+# We're only interested in positive correlations
+W_fused[W_fused<0] <- 0
+
+# We also apply a threshold to keep only the most significant edges
+threshold_snf <- 0
+W_fused[W_fused < threshold_snf] <- 0
+
+diag(W_fused) <- 0
+```
+
 #### Community Detection on the Fused Network
 
 We apply Louvain clustering on the fused network to identify multi-omics communities.
@@ -1777,16 +1807,16 @@ cat("Number of communities found with SNF:", length(unique(comm_res_snf$communit
 Thresholding the matrix to improve readability
 
 ```{r}
-l_comp_snf <- W_fused
-threshold_snf <- 0.02
-l_comp_snf[l_comp_snf < threshold_snf] <- 0
-diag(l_comp_snf) <- 0
+#l_comp_snf <- W_fused
+#threshold_snf <- 0.02
+#l_comp_snf[l_comp_snf < threshold_snf] <- 0
+#diag(l_comp_snf) <- 0
 ```
 
 Network object
 
 ```{r}
-net_snf <- network(l_comp_snf, matrix.type = "adjacency", ignore.eval = FALSE, names.eval = "weights", directed = FALSE)
+net_snf <- network(W_fused, matrix.type = "adjacency", ignore.eval = FALSE, names.eval = "weights", directed = FALSE)
 ```
 
 Assign attributes
@@ -1855,7 +1885,7 @@ ggplot(melted_cmat, aes(x = SNF_Group, y = RNA_Group, fill = Count)) +
   theme(panel.grid.major = element_blank())
 ```
 
-# PSN Communities Characterization (Clinical & Survival)
+## PSN Communities Characterization (Clinical & Survival)
 
 Stage 1 merges biological, clinical, and network-based information into a single patient-level table that will allow us to understand what defines each community and whether communities differ in survival or mutation patterns.
 
@@ -1871,8 +1901,6 @@ library(maftools)
 library(TCGAbiolinks)
 library(stringr)
 library(tidyr)
-
-
 ```
 
 ```{r}
@@ -2240,6 +2268,6 @@ if (!is.null(comp_KEGG) && nrow(comp_KEGG@compareClusterResult) > 0) {
 
 Below there's an image because this library saves the plot as image within the main directory
 
-![](images/clipboard-3206778324.png)
+![](images/clipboard-2023213764.png)
 
-Key receptors such as **c-Fms** and inflammatory mediators like **NFkB** are upregulated (red nodes), indicating active signaling cascades. Most notably, downstream osteoclast-specific marker genes, including **CTSK** (Cathepsin K) and **TRAP**, show strong upregulation. This suggests that the tumor microenvironment mimics osteoclastogenic activity, potentially facilitating tissue remodeling or indicating a predisposition for bone metastasis, a known complication of renal cell carcinoma.
+This pathway indicates a shift towards chronic inflammation and tissue remodeling. Key components of the classical complement pathway, including the initiator **C1q** and the central hub **C3**, are upregulated (red nodes). Crucially, the strong upregulation of receptors such as **C5aR1**, **C3AR1**, and the integrin receptors **CR3/CR4** suggests active signaling for immune cell recruitment (chemotaxis) and adhesion, rather than direct cell lysis (as the terminal MAC complex remains downregulated). Furthermore, the upregulation of **uPAR** (PLAUR) and coagulation factors like **F10** and **F12** highlights a mechanism for extracellular matrix degradation and a pro-thrombotic state, facilitating tumor spreading and metastasis.
