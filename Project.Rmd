@@ -8,6 +8,13 @@ output:
     df_print: paged
 ---
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  warning = FALSE,
+  message = FALSE
+)
+```
+
 **Project Steps:**
 
 1.  Selection of the disease: Kidney renal papillary cell carcinoma (KIRP)
@@ -1335,9 +1342,11 @@ ggnet2(net_subnet, color = "color", alpha = 0.8, size = 4,
 
 #### Data preparation
 
+We construct the Patient Similarity Network using normalized and log-transformed tumor expression data restricted to the DEGs.
+Raw counts are not used, as highly expressed genes would dominate similarity estimates.
+
 ```{r}
-# we use expr_deg_cancer because it contains normalized and log-transoformed data
-# dds or rna.expr.data.C are raw counts so if used well expressed genes would end up dominating the calculation
+
 target_data <- as.matrix(expr_deg_cancer)
 ```
 
@@ -1352,7 +1361,9 @@ print(dim(target_data)) # we expect N_DEGs x 32 patients
 Calculate Pearson correlation between patients (columns)
 
 ```{r}
-patient_sim_matrix <- cor(target_data, method = "pearson")
+# Patient similarity matrix (patients x patients)
+psn_full <- cor(target_data, method = "pearson")
+
 ```
 
 #### Clean-up of the matrix
@@ -1360,34 +1371,77 @@ patient_sim_matrix <- cor(target_data, method = "pearson")
 Set the diagonal to 0 to remove self-loops
 
 ```{r}
-diag(patient_sim_matrix) <- 0
-dim(patient_sim_matrix)
+# Remove self-loops
+diag(psn_full) <- 0
+
+# Keep only positive similarities
+psn_full[psn_full < 0] <- 0
+
+# Sanity check
+stopifnot(all(is.finite(psn_full)))
+dim(psn_full)
+
 ```
 
-#### Manage negative correlations
 
-We're only interested in positive correlations
 
 ```{r}
-patient_sim_matrix[patient_sim_matrix<0] <- 0
+# Build graph from FULL similarity matrix
+psn_graph <- graph_from_adjacency_matrix(
+  psn_full,
+  mode = "undirected",
+  weighted = TRUE,
+  diag = FALSE
+)
+
+# Louvain community detection
+louvain_psn <- cluster_louvain(psn_graph)
+
+# Community membership
+comm_res <- data.frame(
+  patient   = names(membership(louvain_psn)),
+  community = as.character(membership(louvain_psn)),
+  stringsAsFactors = FALSE
+)
+
+cat("Number of PSN communities:",
+    length(unique(comm_res$community)), "\n")
+
 ```
 
 We also apply a threshold to keep only the most significant edges
 
 ```{r}
-threshold_plot <- 0.7 
-patient_sim_matrix[patient_sim_matrix < threshold_plot] <- 0
+###############################################################################
+# Thresholded PSN — visualization only
+###############################################################################
+
+threshold_plot <- 0.7
+
+psn_plot <- psn_full
+psn_plot[psn_plot < threshold_plot] <- 0
+diag(psn_plot) <- 0
+
+cat("Edges shown in plot:", sum(psn_plot > 0) / 2, "\n")
+
 ```
 
 #### Create the network object
 
 ```{r}
-psn_graph <- graph_from_adjacency_matrix(
-  patient_sim_matrix,
-  mode = "undirected",
-  weighted = TRUE,
-  diag = FALSE
+net_obj <- network(
+  psn_plot,
+  matrix.type = "adjacency",
+  ignore.eval = FALSE,   # keep weights
+  names.eval  = "weights",
+  directed    = FALSE
 )
+
+# Attach community labels from FULL PSN clustering
+net_names <- network.vertex.names(net_obj)
+net_obj %v% "community" <-
+  comm_res$community[match(net_names, comm_res$patient)]
+
 ```
 
 #### Check of the graph
@@ -1400,185 +1454,146 @@ cat("# of edges:", ecount(psn_graph), "\n")
 Plot of the PSN
 
 ```{r}
-# creates a network object because ggnet2 needs it for plotting
-# otherwise by passing an igraph object such as psn_graph, it would need an additional library
-net_obj <- network(patient_sim_matrix, 
-                   matrix.type = "adjacency", 
-                   ignore.eval = FALSE,    # keeps weights
-                   names.eval = "weights", 
-                   directed = FALSE)
+# Define a manual color palette
+pal <- c("1" = "#1f78b4",   # blue
+         "2" = "#e31a1c")   # red
 
 ggnet2(net_obj,
+       color = "community",
+       palette = pal,
+       alpha = 0.9,
        size = 6,
-       color = "orange",
        label = TRUE,
        label.size = 3,
-       label.color = "black",
-       edge.size = "weights",      
-       edge.color = "gray80"
-) +
-  ggtitle("Patient Similarity Network")
-```
-
-### b. Community detection
-
-#### Applying the Louvain Algorithm
-
-```{r}
-louvain_cl <- cluster_louvain(psn_graph)
-```
-
-#### Create the result dataframe
-
-```{r}
-comm_res <- data.frame(
-  patient = names(membership(louvain_cl)),
-  community = as.character(membership(louvain_cl)),
-  stringsAsFactors = FALSE
-)
-```
-
-#### Network Preparation for Plotting
-
-Create the network object
-
-```{r}
-net_final <- network(patient_sim_matrix, 
-                     matrix.type = "adjacency", 
-                     ignore.eval = FALSE, 
-                     names.eval = "weights", 
-                     directed = FALSE)
-```
-
-#### Assigning attributes
-
-```{r}
-net_names <- network.vertex.names(net_final)
-net_final %v% "community" <- comm_res$community[match(net_names, comm_res$patient)]
-network::set.edge.attribute(net_final, "edgecolor", "gray90")
-```
-
-#### Check how many communities we have
-
-```{r}
-n_communities <- length(unique(net_final %v% "community"))
-cat("Number of communities found:", n_communities, "\n")
-```
-
-#### Plot
-
-```{r}
-# Create colour palette (Dynamic based on number of communities)
-set.seed(13)
-# Sample distinct colors
-pal <- sample(colors(distinct = TRUE), n_communities)
-names(pal) <- sort(unique(net_final %v% "community"))
-
-ggnet2(net_final, 
-       color = "community", 
-       palette = pal, 
-       alpha = 0.9, 
-       size = 6, 
-       label = TRUE,               # patient IDs
-       label.size = 3,
-       edge.color = "edgecolor", 
-       edge.alpha = 0.8, 
+       edge.color = "gray80",
+       edge.alpha = 0.7,
        edge.size = 0.3) +
-  guides(size = "none") +
-  ggtitle("PSN Community Structure (Louvain)")
+  ggtitle("Patient Similarity Network (Full PSN, thresholded for visualization)")
+
+
 ```
+
+
+
 
 ## 5. PSN USING NORMAL GENE EXPRESSION
 
 Data preparation
 
 ```{r}
-target_data_normal <- as.matrix(expr_deg_normal)   # DEGs × Patients (normal samples)
+# Expression matrix: DEGs x patients (normal samples)
+target_data_normal <- as.matrix(expr_deg_normal)
 
 cat("Dimension NORMAL matrix (DEGs x Patients):\n")
 print(dim(target_data_normal))
+
 ```
 
 Similarity matrix calculation
 
 ```{r}
-psn_normal_matrix <- cor(target_data_normal, method = "pearson")
+# FULL similarity matrix (patients x patients)
+psn_normal_full <- cor(target_data_normal, method = "pearson")
+# Remove self-loops
+diag(psn_normal_full) <- 0
 
-# Remove auto-correlations
-diag(psn_normal_matrix) <- 0
+# Keep only positive similarities
+psn_normal_full[psn_normal_full < 0] <- 0
 
-# Consider only positive correlations
-psn_normal_matrix[psn_normal_matrix < 0] <- 0
+# Sanity check
+stopifnot(all(is.finite(psn_normal_full)))
+dim(psn_normal_full)
+
 ```
 
 As before, we also apply a threshold to keep only the most significant edges
 
 ```{r}
-threshold_plot <- 0.7 
-psn_normal_matrix[psn_normal_matrix < threshold_plot] <- 0
-```
-
-Create the network object
-
-```{r}
+# Build graph from FULL similarity matrix
 psn_graph_normal <- graph_from_adjacency_matrix(
-  psn_normal_matrix,
+  psn_normal_full,
   mode = "undirected",
   weighted = TRUE,
   diag = FALSE
 )
-cat("NORMAL PSN — Nodes:", vcount(psn_graph_normal),
-    "Edges:", ecount(psn_graph_normal), "\n")
-```
 
-Community detection with Louvain
-
-```{r}
+# Louvain clustering
 louvain_normal <- cluster_louvain(psn_graph_normal)
 
+# Community membership
 comm_res_normal <- data.frame(
-  patient = names(membership(louvain_normal)),
+  patient          = names(membership(louvain_normal)),
   community_normal = as.character(membership(louvain_normal)),
   stringsAsFactors = FALSE
 )
 
 cat("Number of communities (NORMAL):",
     length(unique(comm_res_normal$community_normal)), "\n")
+
 ```
 
-Preparation for plotting
+Create the network object
 
 ```{r}
-net_normal <- network(psn_normal_matrix,
-                      matrix.type = "adjacency",
-                      ignore.eval = FALSE,
-                      names.eval = "weights",
-                      directed = FALSE)
+###############################################################################
+# THRESHOLDED NETWORK — VISUALIZATION ONLY
+###############################################################################
 
-net_names_norm <- network.vertex.names(net_normal)
-net_normal %v% "community" <- comm_res_normal$community_normal[
-  match(net_names_norm, comm_res_normal$patient)
-]
+plot_thr <- 0.85
+
+A_plot <- psn_normal_full
+A_plot[A_plot < plot_thr] <- 0
+diag(A_plot) <- 0
+
+cat("Edges shown in plot:", sum(A_plot > 0) / 2, "\n")
+
 ```
 
-Plot Normal PSN
+Community detection with Louvain
+
+```{r}
+net_normal <- network(
+  A_plot,
+  matrix.type = "adjacency",
+  ignore.eval = FALSE,
+  names.eval = "weights",
+  directed = FALSE
+)
+
+# Attach FULL community labels
+net_names_norm <- network.vertex.names(net_normal)
+net_normal %v% "community" <-
+  comm_res_normal$community_normal[
+    match(net_names_norm, comm_res_normal$patient)
+  ]
+
+```
+
+
 
 ```{r}
 set.seed(77)
 n_comm_norm <- length(unique(net_normal %v% "community"))
-palette_norm <- sample(colors(distinct = TRUE), n_comm_norm)
-names(palette_norm) <- sort(unique(net_normal %v% "community"))
+
+palette_norm <- c(
+  "1" = "#1f78b4",
+  "2" = "#33a02c",
+  "3" = "#e31a1c"
+)[seq_len(n_comm_norm)]
 
 ggnet2(net_normal,
        color = "community",
        palette = palette_norm,
+       alpha = 0.9,
        size = 6,
        label = TRUE,
        label.size = 3,
        edge.color = "gray85",
        edge.alpha = 0.8) +
-  ggtitle("Patient Similarity Network — NORMAL (DEGs)")
+  ggtitle("Patient Similarity Network — NORMAL (Full PSN, thresholded for visualization)")
+
 ```
+
 
 Comparison between Tumor and Normal PSNs
 
@@ -1816,7 +1831,25 @@ Thresholding the matrix to improve readability
 Network object
 
 ```{r}
-net_snf <- network(W_fused, matrix.type = "adjacency", ignore.eval = FALSE, names.eval = "weights", directed = FALSE)
+###############################################################################
+# THRESHOLDED SNF NETWORK (FOR VISUALIZATION ONLY)
+###############################################################################
+
+plot_thr_snf <- 0.02   # tipico per SNF (0.01–0.05)
+
+A_snf_plot <- W_fused
+A_snf_plot[A_snf_plot < plot_thr_snf] <- 0
+diag(A_snf_plot) <- 0
+
+cat("SNF plot edges:", sum(A_snf_plot > 0) / 2, "\n")
+
+net_snf <- network(
+  A_snf_plot,
+  matrix.type = "adjacency",
+  ignore.eval = FALSE,
+  names.eval = "weights",
+  directed = FALSE
+)
 ```
 
 Assign attributes
@@ -1840,9 +1873,9 @@ ggnet2(net_snf,
        size = 6, 
        label = TRUE, 
        label.size = 3,
-       edge.color = "gray90", 
-       edge.alpha = 1) +
-  ggtitle("SNF Community Structure (Expression + Mutation)")
+       edge.color = "gray80", 
+       edge.alpha = 0.7) +
+  ggtitle("SNF Community Structure (Expression + Mutation, thresholded)")
 ```
 
 #### Final comparison
@@ -1893,149 +1926,11 @@ Stage 1 merges biological, clinical, and network-based information into a single
 
 ### Load libraries
 
-```{r message=FALSE}
-library(dplyr)
-library(survival)
-library(survminer)
-library(maftools)
-library(TCGAbiolinks)
-library(stringr)
-library(tidyr)
-```
-
-```{r}
-length(unique(comm_res_snf$patient))
-head(comm_res_snf)
-```
-
-```{r, results='hide'}
-query_clin <- GDCquery(
-  project = proj,
-  data.category = "Clinical",
-  data.type = "Clinical Supplement",
-  data.format = "BCR XML"
-)
-
-# Only run once (then comment)
-GDCdownload(query = query_clin)
-
-clinical_kirp <- GDCprepare_clinic(query_clin, clinical.info = "patient")
-
-```
-
-```{r}
-clinical_kirp <- clinical_kirp %>%
-  mutate(
-    patient = bcr_patient_barcode,
-    survival_time = ifelse(!is.na(days_to_death),
-                           days_to_death,
-                           days_to_last_followup),
-    survival_status = ifelse(vital_status == "Dead", 1, 0)
-  ) %>%
-  filter(!is.na(survival_time)) %>%
-  select(patient, survival_time, survival_status, age_at_initial_pathologic_diagnosis, gender)
-head(clinical_kirp)
-```
-
-```{r}
-# Standardize patient column
-comm_res$patient     <- substr(comm_res$patient, 1, 12)
-comm_res_normal$patient <- substr(comm_res_normal$patient, 1, 12)
-comm_res_snf$patient <- substr(comm_res_snf$patient, 1, 12)
-clinical_kirp$patient <- substr(clinical_kirp$patient, 1, 12)
-
-rownames(mut_matrix_binary) <- substr(rownames(mut_matrix_binary), 1, 12)
-```
-
-```{r}
-str(mut_matrix_binary)  # patients × genes (0/1)
-```
-
-```{r}
-DDR_genes  <- c("TP53", "ATM", "ATR", "BRCA1", "BRCA2", "CHEK1", "CHEK2")
-TP53_path  <- c("TP53")
-WNT_genes  <- c("APC", "CTNNB1", "AXIN1", "LRP5", "LRP6")
-RTK_RAS_genes <- c("KRAS", "NRAS", "HRAS", "BRAF", "EGFR", "ERBB2")
-PI3K_genes <- c("PIK3CA", "PTEN", "AKT1", "AKT2")
-
-```
-
-```{r}
-DDR_genes      <- intersect(DDR_genes, colnames(mut_matrix_binary))
-TP53_path      <- intersect(TP53_path, colnames(mut_matrix_binary))
-WNT_genes      <- intersect(WNT_genes, colnames(mut_matrix_binary))
-RTK_RAS_genes  <- intersect(RTK_RAS_genes, colnames(mut_matrix_binary))
-PI3K_genes     <- intersect(PI3K_genes, colnames(mut_matrix_binary))
-```
-
-```{r}
-pathway_matrix <- data.frame(
-  patient = rownames(mut_matrix_binary),
-  DDR      = as.integer(rowSums(mut_matrix_binary[, DDR_genes, drop = FALSE]) > 0),
-  TP53     = as.integer(rowSums(mut_matrix_binary[, TP53_path, drop = FALSE]) > 0),
-  WNT      = as.integer(rowSums(mut_matrix_binary[, WNT_genes, drop = FALSE]) > 0),
-  RTK_RAS  = as.integer(rowSums(mut_matrix_binary[, RTK_RAS_genes, drop = FALSE]) > 0),
-  PI3K     = as.integer(rowSums(mut_matrix_binary[, PI3K_genes, drop = FALSE]) > 0)
-)
-
-```
-
-```{r}
-tmb_res <- tmb(maf_obj)
-tmb_df <- tmb_res %>%
-  select(Tumor_Sample_Barcode, total_perMB) %>%
-  mutate(
-    patient = substr(Tumor_Sample_Barcode, 1, 12),
-    TMB = total_perMB,
-    TMB_high = TMB > 10
-  ) %>%
-  select(patient, TMB, TMB_high)
-
-```
-
-```{r}
-clinical_kirp <- clinical_kirp %>%
-  distinct(patient, .keep_all = TRUE)
-clinical_kirp <- clinical_kirp %>% 
-  filter(!is.na(survival_time), !is.na(survival_status))
 
 
-```
 
-```{r}
-master_table <- comm_res_snf %>%
-  rename(cluster_snf = community_snf) %>%
-  
-  # Add RNA-only PSN clusters
-  left_join(comm_res %>% rename(cluster_rna = community),
-            by = "patient") %>%
-  
-  # Add clinical survival data
-  left_join(clinical_kirp,
-            by = "patient") %>%
-  
-  # Add mutation pathway indicators
-  left_join(pathway_matrix,
-            by = "patient") %>%
-  
-  # Add TMB
-  left_join(tmb_df,
-            by = "patient")
 
-```
 
-```{r}
-# Remove duplicates from master table
-master_table <- master_table %>%
-  distinct(patient, .keep_all = TRUE)
-```
-
-```{r}
-cat("Number of patients in master table:", nrow(master_table), "\n")
-head(master_table, 10)
-summary(master_table)
-
-```
 
 ## 3(opt). Gene Set Enrichment Analysis (cancer hubs)
 
@@ -2268,6 +2163,837 @@ if (!is.null(comp_KEGG) && nrow(comp_KEGG@compareClusterResult) > 0) {
 
 Below there's an image because this library saves the plot as image within the main directory
 
-![](images/clipboard-2023213764.png)
+![](hsa04610.cancer_hubs.png)
 
 This pathway indicates a shift towards chronic inflammation and tissue remodeling. Key components of the classical complement pathway, including the initiator **C1q** and the central hub **C3**, are upregulated (red nodes). Crucially, the strong upregulation of receptors such as **C5aR1**, **C3AR1**, and the integrin receptors **CR3/CR4** suggests active signaling for immune cell recruitment (chemotaxis) and adhesion, rather than direct cell lysis (as the terminal MAC complex remains downregulated). Furthermore, the upregulation of **uPAR** (PLAUR) and coagulation factors like **F10** and **F12** highlights a mechanism for extracellular matrix degradation and a pro-thrombotic state, facilitating tumor spreading and metastasis.
+
+# PSN communities characterization
+
+To address PSN community characterization in a statistically meaningful way, we adopted a tumor-only strategy, using all available primary tumor samples and retaining one tumor sample per patient. This choice allows us to substantially increase the number of patients included in the analysis, overcoming the severe sample size limitation that arises when restricting the cohort to paired tumor–normal samples only.
+
+```{r}
+###############################################################################
+#  Tumor-only cohort: one Primary Tumor per patient
+###############################################################################
+
+# Raw tumor counts (genes x samples)
+expr.C_all <- as.data.frame(rna.expr.data.C)
+
+# Extract patient IDs (12 characters)
+patients.C_all <- substr(colnames(expr.C_all), 1, 12)
+
+# Count tumor samples per patient
+tab.C_all <- table(patients.C_all)
+
+# Keep only patients with exactly ONE tumor sample
+single_patients_all <- names(tab.C_all[tab.C_all == 1])
+
+# Subset expression matrix
+idx.single.all <- which(patients.C_all %in% single_patients_all)
+expr.C_all <- expr.C_all[, idx.single.all, drop = FALSE]
+
+# Rename columns to pure patient IDs
+colnames(expr.C_all) <- substr(colnames(expr.C_all), 1, 12)
+
+# Final sanity checks
+stopifnot(sum(duplicated(colnames(expr.C_all))) == 0)
+
+cat("Tumor-only cohort (genes x patients):",
+    nrow(expr.C_all), "x", ncol(expr.C_all), "\n")
+
+```
+```{r}
+###############################################################################
+#  Tumor-only normalization 
+
+# Compute library sizes
+lib_size <- colSums(expr.C_all)
+
+# CPM normalization
+tumor_norm <- sweep(expr.C_all, 2, lib_size, FUN = "/") * 1e6
+
+# Log-transform
+tumor_norm_log <- log2(tumor_norm + 1)
+
+
+cat("Tumor-only normalized matrix:",
+    nrow(tumor_norm_log), "genes x",
+    ncol(tumor_norm_log), "patients\n")
+
+
+```
+
+
+
+
+
+```{r message=FALSE}
+
+library(survival)
+library(survminer)
+library(maftools)
+library(TCGAbiolinks)
+library(stringr)
+library(dplyr)
+library(tidyr)
+```
+
+
+```{r, results='hide'}
+query_clin <- GDCquery(
+  project = proj,
+  data.category = "Clinical",
+  data.type = "Clinical Supplement",
+  data.format = "BCR XML"
+)
+
+# Only run once (then comment)
+GDCdownload(query = query_clin)
+
+clinical_kirp <- GDCprepare_clinic(query_clin, clinical.info = "patient")
+
+```
+
+```{r}
+clinical_kirp <- clinical_kirp %>%
+  dplyr::mutate(
+    patient = bcr_patient_barcode,
+    survival_time = ifelse(!is.na(days_to_death),
+                           days_to_death,
+                           days_to_last_followup),
+    survival_status = ifelse(vital_status == "Dead", 1, 0)
+  ) %>%
+  dplyr::filter(!is.na(survival_time)) %>%
+  dplyr::select(
+    patient,
+    survival_time,
+    survival_status,
+    age_at_initial_pathologic_diagnosis,
+    gender
+  )
+
+head(clinical_kirp)
+```
+
+
+
+```{r}
+
+DDR_genes  <- c("TP53", "ATM", "ATR", "BRCA1", "BRCA2", "CHEK1", "CHEK2")
+TP53_path  <- c("TP53")
+WNT_genes  <- c("APC", "CTNNB1", "AXIN1", "LRP5", "LRP6")
+RTK_RAS_genes <- c("KRAS", "NRAS", "HRAS", "BRAF", "EGFR", "ERBB2")
+PI3K_genes <- c("PIK3CA", "PTEN", "AKT1", "AKT2")
+
+```
+
+```{r}
+DDR_genes      <- intersect(DDR_genes, colnames(mut_matrix_binary))
+TP53_path      <- intersect(TP53_path, colnames(mut_matrix_binary))
+WNT_genes      <- intersect(WNT_genes, colnames(mut_matrix_binary))
+RTK_RAS_genes  <- intersect(RTK_RAS_genes, colnames(mut_matrix_binary))
+PI3K_genes     <- intersect(PI3K_genes, colnames(mut_matrix_binary))
+```
+
+```{r}
+pathway_matrix <- data.frame(
+  patient = rownames(mut_matrix_binary),
+  DDR      = as.integer(rowSums(mut_matrix_binary[, DDR_genes, drop = FALSE]) > 0),
+  TP53     = as.integer(rowSums(mut_matrix_binary[, TP53_path, drop = FALSE]) > 0),
+  WNT      = as.integer(rowSums(mut_matrix_binary[, WNT_genes, drop = FALSE]) > 0),
+  RTK_RAS  = as.integer(rowSums(mut_matrix_binary[, RTK_RAS_genes, drop = FALSE]) > 0),
+  PI3K     = as.integer(rowSums(mut_matrix_binary[, PI3K_genes, drop = FALSE]) > 0)
+)
+
+```
+
+```{r}
+# Compute TMB
+tmb_res <- tmb(maf_obj)
+
+# Convert data.table -> data.frame BEFORE dplyr
+tmb_df <- as.data.frame(tmb_res) %>%
+  dplyr::select(Tumor_Sample_Barcode, total_perMB) %>%
+  dplyr::mutate(
+    patient  = substr(Tumor_Sample_Barcode, 1, 12),
+    TMB      = total_perMB,
+    TMB_high = TMB > 10
+  ) %>%
+  dplyr::select(patient, TMB, TMB_high)
+
+
+```
+
+```{r}
+clinical_kirp <- clinical_kirp %>%
+  distinct(patient, .keep_all = TRUE)
+clinical_kirp <- clinical_kirp %>% 
+  filter(!is.na(survival_time), !is.na(survival_status))
+```
+
+
+
+
+```{r}
+###############################################################################
+# Alignment checks (RNA vs mutation vs clinical)
+###############################################################################
+
+patients_rna <- colnames(tumor_norm_log)
+patients_mut <- rownames(mut_matrix_binary)
+patients_clin <- clinical_kirp$patient
+
+cat("RNA tumor patients:", length(patients_rna), "\n")
+cat("Mutation patients:", length(patients_mut), "\n")
+cat("Clinical patients:", length(patients_clin), "\n")
+
+cat("RNA ∩ Mutation:",
+    length(intersect(patients_rna, patients_mut)), "\n")
+cat("RNA ∩ Clinical:",
+    length(intersect(patients_rna, patients_clin)), "\n")
+
+```
+```{r}
+###############################################################################
+#  DEG panel availability in tumor-only cohort
+###############################################################################
+
+# DEG_list is already defined from paired analysis
+length(DEG_list)
+
+# Intersection with tumor-only expression matrix
+DEG_list_all <- intersect(DEG_list, rownames(tumor_norm_log))
+
+cat("DEGs from paired analysis:", length(DEG_list), "\n")
+cat("DEGs available in tumor-only matrix:", length(DEG_list_all), "\n")
+
+```
+
+```{r}
+
+
+X_tumor_deg <- tumor_norm_log[DEG_list, , drop = FALSE]
+
+cat("Final PSN feature matrix:",
+    nrow(X_tumor_deg), "genes x",
+    ncol(X_tumor_deg), "patients\n")
+
+
+```
+```{r}
+
+
+###############################################################################
+# PSN (RNA-only, FULL)
+###############################################################################
+
+target_data_all <- as.matrix(X_tumor_deg)
+
+psn_full <- cor(target_data_all, method = "pearson")
+diag(psn_full) <- 0
+psn_full[psn_full < 0] <- 0   # opzionale ma ok
+
+stopifnot(all(is.finite(psn_full)))
+
+cat("Full PSN:", dim(psn_full), "\n")
+
+
+
+
+
+```
+```{r}
+###############################################################################
+# Louvain on FULL PSN
+###############################################################################
+
+psn_graph_full <- graph_from_adjacency_matrix(
+  psn_full,
+  mode = "undirected",
+  weighted = TRUE,
+  diag = FALSE
+)
+
+louvain_psn_all <- cluster_louvain(psn_graph_full)
+
+comm_res_psn_all <- data.frame(
+  patient   = names(membership(louvain_psn_all)),
+  community = as.character(membership(louvain_psn_all)),
+  stringsAsFactors = FALSE
+)
+
+cat("Number of PSN communities:",
+    length(unique(comm_res_psn_all$community)), "\n")
+
+
+```
+```{r}
+###############################################################################
+# PSN for visualization ONLY
+###############################################################################
+
+plot_thr <- 0.8
+
+psn_plot <- psn_full
+psn_plot[psn_plot < plot_thr] <- 0
+diag(psn_plot) <- 0
+
+cat("Edges for plot:", sum(psn_plot > 0) / 2, "\n")
+
+```
+```{r}
+###############################################################################
+# Network object for ggnet2
+###############################################################################
+
+net_psn_all <- network(
+  psn_plot,
+  matrix.type = "adjacency",
+  ignore.eval = FALSE,
+  names.eval = "weights",
+  directed = FALSE
+)
+
+net_names <- network.vertex.names(net_psn_all)
+net_psn_all %v% "community" <-
+  comm_res_psn_all$community[match(net_names, comm_res_psn_all$patient)]
+
+
+```
+```{r}
+###############################################################################
+# Plot
+###############################################################################
+
+n_comm <- length(unique(net_psn_all %v% "community"))
+set.seed(13)
+pal <- sample(colors(distinct = TRUE), n_comm)
+names(pal) <- sort(unique(net_psn_all %v% "community"))
+
+ggnet2(net_psn_all,
+       color = "community",
+       palette = pal,
+       alpha = 0.9,
+       size = 5,
+       label = FALSE,
+       edge.color = "gray80",
+       edge.alpha = 0.6,
+       edge.size = 0.3) +
+  ggtitle("PSN Communities (Full clustering, edges r > 0.8)")
+
+
+
+```
+```{r}
+###############################################################################
+# Patient alignment (RNA vs Mutation)
+###############################################################################
+
+patients_rna_all <- colnames(X_tumor_deg)
+patients_mut <- rownames(mut_matrix_binary)
+
+common_patients_all <- intersect(patients_rna_all, patients_mut)
+
+cat("Patients RNA:", length(patients_rna_all), "\n")
+cat("Patients Mutation:", length(patients_mut), "\n")
+cat("Common patients for SNF:", length(common_patients_all), "\n")
+
+```
+```{r}
+###############################################################################
+# Prepare SNF input matrices
+###############################################################################
+
+# RNA view: patients x genes
+data_expression_all <- t(X_tumor_deg[, common_patients_all, drop = FALSE])
+
+# Mutation view: patients x genes
+data_mutation_all <- mut_matrix_binary[common_patients_all, , drop = FALSE]
+
+# Final check
+stopifnot(all(rownames(data_expression_all) == rownames(data_mutation_all)))
+
+cat("RNA view:", dim(data_expression_all), "\n")
+cat("Mutation view:", dim(data_mutation_all), "\n")
+
+```
+```{r}
+###############################################################################
+# RNA affinity matrix
+###############################################################################
+
+dist_exp_all <- dist2(
+  as.matrix(data_expression_all),
+  as.matrix(data_expression_all)
+)
+
+W_exp_all <- affinityMatrix(dist_exp_all, K, alpha)
+
+```
+
+```{r}
+###############################################################################
+# Mutation affinity matrix
+###############################################################################
+
+dist_mut_all <- dist2(
+  as.matrix(data_mutation_all),
+  as.matrix(data_mutation_all)
+)
+
+W_mut_all <- affinityMatrix(dist_mut_all, K, alpha)
+
+
+```
+```{r}
+###############################################################################
+# Network fusion
+###############################################################################
+
+W_fused_all <- SNF(
+  list(W_exp_all, W_mut_all),
+  K,
+  T_iter
+)
+
+rownames(W_fused_all) <- common_patients_all
+colnames(W_fused_all) <- common_patients_all
+
+# Remove self-loops
+diag(W_fused_all) <- 0
+
+
+W_fused_all[W_fused_all < 0] <- 0
+
+```
+```{r}
+graph_snf_all <- graph_from_adjacency_matrix(
+  W_fused_all,
+  mode = "undirected",
+  weighted = TRUE,
+  diag = FALSE
+)
+
+louvain_snf_all <- cluster_louvain(graph_snf_all)
+
+comm_res_snf_all <- data.frame(
+  patient = names(membership(louvain_snf_all)),
+  community_snf = as.character(membership(louvain_snf_all)),
+  stringsAsFactors = FALSE
+)
+
+cat("Number of SNF communities:",
+    length(unique(comm_res_snf_all$community_snf)), "\n")
+```
+```{r}
+net_snf_all <- network(
+  W_fused_all,
+  matrix.type = "adjacency",
+  ignore.eval = FALSE,
+  names.eval = "weights",
+  directed = FALSE
+)
+
+net_names <- network.vertex.names(net_snf_all)
+net_snf_all %v% "community" <-
+  comm_res_snf_all$community_snf[
+    match(net_names, comm_res_snf_all$patient)
+  ]
+```
+```{r}
+###############################################################################
+# Standardize patient IDs (12 chars) + deduplicate
+###############################################################################
+
+comm_res_snf_all$patient <- substr(comm_res_snf_all$patient, 1, 12)
+clinical_kirp$patient    <- substr(clinical_kirp$patient, 1, 12)
+pathway_matrix$patient   <- substr(pathway_matrix$patient, 1, 12)
+tmb_df$patient           <- substr(tmb_df$patient, 1, 12)
+
+clinical_kirp  <- clinical_kirp %>% distinct(patient, .keep_all = TRUE)
+pathway_matrix <- pathway_matrix %>% distinct(patient, .keep_all = TRUE)
+tmb_df         <- tmb_df %>% distinct(patient, .keep_all = TRUE)
+
+###############################################################################
+# Build master table (SNF + clinical + enrichment features)
+###############################################################################
+
+master_table_all <- comm_res_snf_all %>%
+  rename(cluster_snf = community_snf) %>%
+  left_join(clinical_kirp,  by = "patient") %>%
+  left_join(pathway_matrix, by = "patient") %>%
+  left_join(tmb_df,         by = "patient") %>%
+  distinct(patient, .keep_all = TRUE)
+
+cat("Patients in master table:", nrow(master_table_all), "\n")
+cat("SNF clusters:", length(unique(master_table_all$cluster_snf)), "\n")
+summary(master_table_all[, c("survival_time","survival_status")])
+
+```
+```{r}
+###############################################################################
+# Survival: Kaplan–Meier by SNF cluster
+###############################################################################
+
+surv_df <- master_table_all %>%
+  filter(!is.na(survival_time), !is.na(survival_status), !is.na(cluster_snf)) %>%
+  mutate(
+    cluster_snf = factor(cluster_snf),
+    survival_time = as.numeric(survival_time),
+    survival_status = as.numeric(survival_status)
+  )
+
+cat("Patients usable for survival:", nrow(surv_df), "\n")
+table(surv_df$cluster_snf)
+
+km_snf <- survfit(Surv(survival_time, survival_status) ~ cluster_snf, data = surv_df)
+
+ggsurvplot(
+  km_snf,
+  data = surv_df,
+  palette = "Dark2",
+  size = 1.3,
+  censor.size = 3,
+  pval = TRUE,
+  conf.int = FALSE,
+  xlab = "Time (days)",
+  ylab = "Overall survival probability",
+  legend.title = "SNF community",
+  ggtheme = theme_classic(base_size = 15)
+)
+```
+```{r}
+###############################################################################
+# Helper functions for enrichment tests
+###############################################################################
+
+# Robust Fisher test (fallback to simulation if needed)
+safe_fisher <- function(tab) {
+  out <- tryCatch(
+    fisher.test(tab),
+    error = function(e)
+      fisher.test(tab, simulate.p.value = TRUE, B = 20000)
+  )
+  out$p.value
+}
+
+# Categorical enrichment (e.g. TMB_high, pathway mutation indicators)
+cluster_enrichment_categorical <- function(df, cluster_col, var_col) {
+
+  tmp <- df %>%
+    dplyr::select(
+      dplyr::all_of(cluster_col),
+      dplyr::all_of(var_col)
+    ) %>%
+    dplyr::filter(!is.na(.data[[var_col]]))
+
+  tab <- table(tmp[[cluster_col]], tmp[[var_col]])
+
+  # Fisher test not defined if table has <2 rows or columns
+  if (min(dim(tab)) < 2) {
+    return(list(
+      table = tab,
+      p.value = NA
+    ))
+  }
+
+  p <- safe_fisher(tab)
+
+  list(
+    table = tab,
+    p.value = p
+  )
+}
+
+# Continuous enrichment (e.g. TMB)
+cluster_enrichment_continuous <- function(df, cluster_col, var_col) {
+
+  tmp <- df %>%
+    dplyr::select(
+      dplyr::all_of(cluster_col),
+      dplyr::all_of(var_col)
+    ) %>%
+    dplyr::filter(!is.na(.data[[var_col]]))
+
+  # Kruskal–Wallis requires at least 2 groups
+  if (length(unique(tmp[[cluster_col]])) < 2) {
+    return(NA)
+  }
+
+  kruskal.test(tmp[[var_col]] ~ tmp[[cluster_col]])$p.value
+}
+
+```
+
+```{r}
+###############################################################################
+#  Enrichment: TMB_high and pathway mutation indicators
+###############################################################################
+
+# TMB_high (categorical)
+res_tmb_high <- cluster_enrichment_categorical(master_table_all, "cluster_snf", "TMB_high")
+res_tmb_high$table
+cat("Enrichment p-value (TMB_high):", res_tmb_high$p.value, "\n")
+
+# TMB (continuous)
+p_tmb <- cluster_enrichment_continuous(master_table_all, "cluster_snf", "TMB")
+cat("Kruskal p-value (TMB):", p_tmb, "\n")
+
+# Pathway indicators (categorical 0/1)
+path_vars <- c("DDR","TP53","WNT","RTK_RAS","PI3K")
+path_vars <- path_vars[path_vars %in% colnames(master_table_all)]
+
+enrich_path <- lapply(path_vars, function(v) {
+  out <- cluster_enrichment_categorical(master_table_all, "cluster_snf", v)
+  data.frame(variable = v, p.value = out$p.value)
+})
+
+enrich_path_df <- do.call(rbind, enrich_path) %>%
+  mutate(p.adj = p.adjust(p.value, method = "fdr")) %>%
+  arrange(p.adj)
+
+enrich_path_df
+
+```
+
+```{r}
+###############################################################################
+#  Clinical enrichment: age + gender
+###############################################################################
+
+# Age
+if ("age_at_initial_pathologic_diagnosis" %in% colnames(master_table_all)) {
+  p_age <- cluster_enrichment_continuous(master_table_all, "cluster_snf", "age_at_initial_pathologic_diagnosis")
+  cat("Kruskal p-value (age):", p_age, "\n")
+}
+
+# Gender
+if ("gender" %in% colnames(master_table_all)) {
+  res_gender <- cluster_enrichment_categorical(master_table_all, "cluster_snf", "gender")
+  res_gender$table
+  cat("Enrichment p-value (gender):", res_gender$p.value, "\n")
+}
+
+```
+```{r}
+###############################################################################
+# Prepare expression + metadata for community DE
+###############################################################################
+
+# Ensure same patients
+common_patients <- intersect(
+  colnames(tumor_norm_log),
+  comm_res_snf_all$patient
+)
+
+expr_comm <- tumor_norm_log[, common_patients, drop = FALSE]
+
+meta_comm <- comm_res_snf_all %>%
+  filter(patient %in% common_patients) %>%
+  mutate(community_snf = factor(community_snf)) %>%
+  arrange(match(patient, common_patients))
+
+stopifnot(all(meta_comm$patient == colnames(expr_comm)))
+
+cat("Patients for community DE:", ncol(expr_comm), "\n")
+table(meta_comm$community_snf)
+
+```
+
+
+```{r}
+###############################################################################
+# Differential expression: community vs rest (LIMMA)
+###############################################################################
+
+library(limma)
+
+# Expression matrix: genes x samples
+expr_mat <- as.matrix(expr_comm)
+
+# Ensure syntactically valid community labels (e.g. C1, C2, ...)
+meta_comm$community_snf <- factor(
+  meta_comm$community_snf,
+  labels = paste0("C", levels(meta_comm$community_snf))
+)
+
+# Design matrix (no intercept)
+design <- model.matrix(~ 0 + community_snf, data = meta_comm)
+colnames(design) <- levels(meta_comm$community_snf)
+
+# Fit linear model
+fit <- lmFit(expr_mat, design)
+
+# Build contrasts: each community vs the average of the others
+communities <- colnames(design)
+
+contrast_list <- sapply(
+  communities,
+  function(cl) {
+    paste0(
+      cl, " - (",
+      paste(setdiff(communities, cl), collapse = " + "),
+      ")/", length(setdiff(communities, cl))
+    )
+  }
+)
+
+contrast_matrix <- makeContrasts(
+  contrasts = contrast_list,
+  levels = design
+)
+
+# Apply contrasts and empirical Bayes moderation
+fit2 <- contrasts.fit(fit, contrast_matrix)
+fit2 <- eBayes(fit2)
+
+
+```
+```{r}
+###############################################################################
+# Extract community-specific DEGs 
+###############################################################################
+
+community_deg_list <- list()
+
+coef_names <- colnames(fit2$coefficients)
+
+for (i in seq_along(communities)) {
+
+  cl <- communities[i]
+
+  res <- topTable(
+    fit2,
+    coef = i,              # <-- USE INDEX, NOT NAME
+    number = Inf,
+    adjust.method = "BH"
+  )
+
+  res$gene <- rownames(res)
+
+  res_sig <- res %>%
+    dplyr::filter(
+      adj.P.Val < 0.05,
+      abs(logFC) >= 1
+    )
+
+  community_deg_list[[cl]] <- res_sig
+
+  cat(
+    "Community", cl, "(", coef_names[i], "):",
+    nrow(res_sig), "DEGs\n"
+  )
+}
+
+```
+
+```{r}
+###############################################################################
+# Prepare gene sets for enrichment (ENTREZ) + background universe
+###############################################################################
+
+# 1) Universe (background): all tested genes in limma (recommended for ORA)
+universe_genes <- rownames(expr_comm)
+universe_genes <- gsub("\\..*", "", universe_genes)  # remove version if ENSG.x
+
+# 2) Convert universe to ENTREZ (once)
+universe_map <- bitr(
+  universe_genes,
+  fromType = ifelse(startsWith(universe_genes[1], "ENSG"), "ENSEMBL", "SYMBOL"),
+  toType   = "ENTREZID",
+  OrgDb    = org.Hs.eg.db
+)
+universe_entrez <- unique(universe_map$ENTREZID)
+
+# 3) Convert each community DEG list to ENTREZ
+community_entrez <- lapply(names(community_deg_list), function(cl) {
+  df <- community_deg_list[[cl]]
+  if (nrow(df) == 0) return(character(0))
+
+  genes <- gsub("\\..*", "", df$gene)
+
+  keyType <- ifelse(startsWith(genes[1], "ENSG"), "ENSEMBL", "SYMBOL")
+
+  mapped <- bitr(
+    genes,
+    fromType = keyType,
+    toType   = "ENTREZID",
+    OrgDb    = org.Hs.eg.db
+  )
+
+  unique(mapped$ENTREZID)
+})
+names(community_entrez) <- names(community_deg_list)
+
+# Quick checks
+sapply(community_entrez, length)
+length(universe_entrez)
+
+```
+
+
+
+```{r}
+go_results <- compareCluster(
+  geneCluster   = community_entrez,
+  fun           = "enrichGO",
+  OrgDb         = org.Hs.eg.db,
+  keyType       = "ENTREZID",
+  ont           = "BP",
+  universe      = universe_entrez,     # IMPORTANT: correct background
+  pvalueCutoff  = 0.05,
+  pAdjustMethod = "BH",
+  readable      = TRUE
+)
+
+# Remove redundant GO terms (recommended)
+go_results_simpl <- simplify(
+  go_results,
+  cutoff      = 0.6,
+  by          = "p.adjust",
+  select_fun  = min
+)
+```
+
+```{r}
+dotplot(
+  go_results_simpl,
+  showCategory = 6,
+  title = "GO Biological Process enrichment by SNF community"
+) +
+  theme_bw(base_size = 13) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.y = element_text(size = 9)
+  )
+
+```
+
+```{r}
+###############################################################################
+#  KEGG pathway enrichment per SNF community
+###############################################################################
+
+kegg_results <- compareCluster(
+  geneCluster   = community_entrez,
+  fun           = "enrichKEGG",
+  organism      = "hsa",
+  universe      = universe_entrez,
+  pvalueCutoff  = 0.05
+)
+
+```
+
+```{r}
+dotplot(
+  kegg_results,
+  showCategory = 5,
+  title = "KEGG pathway enrichment by SNF community"
+) +
+  theme_bw(base_size = 13) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.y = element_text(size = 9)
+  )
+
+```
